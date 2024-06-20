@@ -11,12 +11,13 @@ default = ["pg16"]
 pg14 = ["pgrx/pg14", "pgrx-tests/pg14" ]
 pg15 = ["pgrx/pg15", "pgrx-tests/pg15" ]
 pg16 = ["pgrx/pg16", "pgrx-tests/pg16" ]
-pg_test = ["dep:rand", "p256/jwk", "base64ct/alloc"]
+pg_test = ["dep:rand", "base64ct/alloc"]
 
 [dependencies]
 base64ct = "1.6.0"
 heapless = { version = "0.7.0", features = ["serde"] }
-p256 = { version = "0.13.2", default-features = false, features = ["sha2", "sha256", "ecdsa", "digest", "serde"] }
+jose-jwk = { version = "0.1.2", default-features = false, features = ["p256"] }
+p256 = { version = "0.13.2", default-features = false, features = ["sha2", "sha256", "ecdsa", "digest", "serde", "jwk"] }
 pgrx = "=0.11.4"
 serde = { version = "1.0.203", features = ["derive"], default-features = false }
 serde_json = { version = "1.0.117", default-features = false }
@@ -27,7 +28,6 @@ rand = { version = "0.8", optional = true }
 [dev-dependencies]
 base64ct = {version = "1.6.0", features = ["alloc"] }
 pgrx-tests = "=0.11.4"
-p256 = { version = "0.13.2", features = ["jwk"] }
 rand = "0.8"
 
 [profile.dev]
