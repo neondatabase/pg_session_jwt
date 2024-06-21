@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::io::Cursor;
 
 use base64::engine::general_purpose;
@@ -7,83 +7,127 @@ use p256::ecdsa::signature::Verifier;
 use p256::ecdsa::{Signature, VerifyingKey};
 use p256::elliptic_curve::generic_array::GenericArray;
 use p256::PublicKey;
-use pg_sys::pid_t;
 use pgrx::{prelude::*, JsonB};
+use serde::de::DeserializeOwned;
+
+type Object = serde_json::Map<String, serde_json::Value>;
 
 pgrx::pg_module_magic!();
 
 thread_local! {
-    static JWK: RefCell<Option<(pid_t, VerifyingKey)>> = const { RefCell::new(None) };
-    static JWT: RefCell<serde_json::Value> = const { RefCell::new(serde_json::Value::Null) };
-    static TXID: RefCell<i64> = const { RefCell::new(0) };
+    static JWK: OnceCell<Key> = const { OnceCell::new() };
+    static JWT: RefCell<Option<Object>> = const { RefCell::new(None) };
+    static JTI: RefCell<i64> = const { RefCell::new(0) };
+}
+
+#[derive(Clone)]
+struct Key {
+    kid: i64,
+    key: VerifyingKey,
 }
 
 #[pg_extern]
-fn init_jwk(pid: pid_t, s: &str) {
-    JWK.with_borrow_mut(|k| {
-        if k.is_some() {
+fn jwk_init(kid: i64, s: &str) {
+    let key = PublicKey::from_jwk_str(s).unwrap();
+    let key = VerifyingKey::from(key);
+    JWK.with(|j| {
+        if j.set(Key { kid, key }).is_err() {
             panic!("JWK state can only be set once per session.")
-        }
-
-        let key = PublicKey::from_jwk_str(s).unwrap();
-        let key = VerifyingKey::from(key);
-        *k = Some((pid, key));
-    });
-}
-
-#[pg_extern]
-fn decrypt_jwt(s: &str) {
-    let (pid, key) = JWK.with_borrow(|b| b.unwrap());
-    let (header_payload, sig) = s.rsplit_once('.').unwrap();
-
-    let mut sig_bytes = GenericArray::default();
-    Base64UrlUnpadded::decode(sig, &mut sig_bytes).unwrap();
-    let sig = Signature::from_bytes(&sig_bytes).unwrap();
-
-    key.verify(header_payload.as_bytes(), &sig).unwrap();
-
-    let (header, payload) = header_payload.split_once('.').unwrap();
-    let header: serde_json::Value = json_base64_decode(header);
-    let payload: serde_json::Value = json_base64_decode(payload);
-
-    let header = header.as_object().expect("JWT header must be an object");
-    let pid2 = header["pid"]
-        .as_number()
-        .expect("JWT header must contain a valid PID")
-        .as_i64()
-        .expect("JWT header must contain a valid PID");
-    if pid as i64 != pid2 {
-        panic!("PID mismatch");
-    }
-
-    let txid = header["txid"]
-        .as_number()
-        .expect("JWT header must contain a valid TXID")
-        .as_i64()
-        .expect("JWT header must contain a valid TXID");
-    TXID.with_borrow_mut(|t| {
-        if txid <= *t {
-            panic!("TXID not monotonic");
-        }
-        *t = txid;
-    });
-
-    assert!(payload.is_object(), "JWT payload must be an object");
-    JWT.set(payload);
-}
-
-#[pg_extern]
-fn neon_get(s: &str) -> JsonB {
-    JWT.with_borrow(|j| {
-        if j.is_null() {
-            JsonB(serde_json::Value::Null)
-        } else {
-            JsonB(j[s].clone())
         }
     })
 }
 
-fn json_base64_decode(s: &str) -> serde_json::Value {
+fn verify_signature(key: &Key, body: &str, sig: &str) {
+    let mut sig_bytes = GenericArray::default();
+    Base64UrlUnpadded::decode(sig, &mut sig_bytes).unwrap();
+    let sig = Signature::from_bytes(&sig_bytes).unwrap();
+
+    key.key.verify(body.as_bytes(), &sig).unwrap();
+}
+
+fn verify_key_id(key: &Key, header: &Object) {
+    let kid = header["kid"]
+        .as_i64()
+        .expect("JWT header must contain a valid 'kid' (key ID)");
+    if key.kid != kid {
+        panic!("Key ID mismatch");
+    }
+}
+
+fn verify_token_id(payload: &Object) -> i64 {
+    let jti = payload["jti"]
+        .as_i64()
+        .expect("JWT payload must contain a valid 'jti' (JWT ID)");
+
+    JTI.with_borrow(|t| {
+        if jti <= *t {
+            panic!("Token ID must be strictly monotonically increasing.");
+        }
+    });
+
+    jti
+}
+
+fn verify_time(payload: &Object) {
+    let now = now()
+        .to_utc()
+        .extract_part(DateTimeParts::Epoch)
+        .expect("could not get current unix epoch");
+    if let Some(nbf) = payload.get("nbf") {
+        let nbf = nbf
+            .as_i64()
+            .expect("'nbf' (Not Before) must be an integer representing seconds since unix epoch");
+        let nbf = AnyNumeric::from(nbf);
+        assert!(nbf < now, "Token used before it is ready")
+    }
+    if let Some(exp) = payload.get("exp") {
+        let exp = exp
+            .as_i64()
+            .expect("'exp' (Expiration) must be an integer representing seconds since unix epoch");
+        let exp = AnyNumeric::from(exp);
+        assert!(now < exp, "Token used after it has expired")
+    }
+}
+
+#[pg_extern]
+fn jwt_session_init(s: &str) {
+    let key = JWK.with(|b| b.get().expect("JWK state has not been initialised").clone());
+    let (body, sig) = s.rsplit_once('.').unwrap();
+    let (header, payload) = body.split_once('.').unwrap();
+    let header: Object = json_base64_decode(header);
+
+    verify_key_id(&key, &header);
+    verify_signature(&key, body, sig);
+
+    let payload: Object = json_base64_decode(payload);
+    let jti = verify_token_id(&payload);
+    verify_time(&payload);
+
+    // update state
+    JTI.replace(jti);
+    JWT.set(Some(payload));
+}
+
+#[pg_extern]
+fn user_extract(s: &str) -> JsonB {
+    JWT.with_borrow(|j| {
+        if let Some(j) = j {
+            JsonB(j[s].clone())
+        } else {
+            JsonB(serde_json::Value::Null)
+        }
+    })
+}
+
+#[pg_extern]
+fn user_id() -> String {
+    match user_extract("sub").0 {
+        serde_json::Value::String(s) => s,
+        _ => panic!("invalid subject claim in the JWT"),
+    }
+}
+
+fn json_base64_decode<D: DeserializeOwned>(s: &str) -> D {
     let mut r = Cursor::new(s.as_bytes());
     let r = base64::read::DecoderReader::new(&mut r, &general_purpose::URL_SAFE_NO_PAD);
     serde_json::from_reader(r).unwrap()
@@ -92,6 +136,9 @@ fn json_base64_decode(s: &str) -> serde_json::Value {
 #[cfg(any(test, feature = "pg_test"))]
 #[pg_schema]
 mod tests {
+    use std::fmt::Display;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use base64::engine::general_purpose;
     use base64::Engine;
     use p256::ecdsa::signature::Signer;
@@ -108,9 +155,9 @@ mod tests {
         general_purpose::URL_SAFE_NO_PAD.encode(s)
     }
 
-    fn sign_jwt(sk: &SigningKey, header: &str, payload: &str) -> String {
+    fn sign_jwt(sk: &SigningKey, header: &str, payload: impl Display) -> String {
         let header = encode_str(header);
-        let payload = encode_str(payload);
+        let payload = encode_str(payload.to_string());
 
         let message = format!("{header}.{payload}");
         let sig: Signature = sk.sign(message.as_bytes());
@@ -126,29 +173,90 @@ mod tests {
         let jwk = JwkEcKey::from_encoded_point::<NistP256>(&point).unwrap();
         let jwk = serde_json::to_string(&jwk).unwrap();
 
-        crate::init_jwk(1, &jwk);
-        crate::init_jwk(2, &jwk);
+        crate::jwk_init(1, &jwk);
+        crate::jwk_init(2, &jwk);
     }
 
     #[pg_test]
-    #[should_panic = "PID mismatch"]
+    #[should_panic = "Key ID mismatch"]
     fn wrong_pid() {
         let sk = SigningKey::random(&mut OsRng);
         let jwk = PublicKey::from(sk.verifying_key()).to_jwk_string();
 
-        crate::init_jwk(1, &jwk);
-        crate::decrypt_jwt(&sign_jwt(&sk, r#"{"pid":2,"txid":1}"#, r#"{}"#));
+        crate::jwk_init(1, &jwk);
+        crate::jwt_session_init(&sign_jwt(&sk, r#"{"kid":2}"#, r#"{"jti":1}"#));
     }
 
     #[pg_test]
-    #[should_panic = "TXID not monotonic"]
+    #[should_panic = "Token ID must be strictly monotonically increasing"]
     fn wrong_txid() {
         let sk = SigningKey::random(&mut OsRng);
         let jwk = PublicKey::from(sk.verifying_key()).to_jwk_string();
 
-        crate::init_jwk(1, &jwk);
-        crate::decrypt_jwt(&sign_jwt(&sk, r#"{"pid":1,"txid":2}"#, r#"{}"#));
-        crate::decrypt_jwt(&sign_jwt(&sk, r#"{"pid":1,"txid":1}"#, r#"{}"#));
+        crate::jwk_init(1, &jwk);
+        crate::jwt_session_init(&sign_jwt(&sk, r#"{"kid":1}"#, r#"{"jti":2}"#));
+        crate::jwt_session_init(&sign_jwt(&sk, r#"{"kid":1}"#, r#"{"jti":1}"#));
+    }
+
+    #[pg_test]
+    #[should_panic = "Token used before it is ready"]
+    fn invalid_nbf() {
+        let sk = SigningKey::random(&mut OsRng);
+        let jwk = PublicKey::from(sk.verifying_key()).to_jwk_string();
+
+        crate::jwk_init(1, &jwk);
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        crate::jwt_session_init(&sign_jwt(
+            &sk,
+            r#"{"kid":1}"#,
+            json!({"jti": 1, "nbf": now + 10}),
+        ));
+    }
+
+    #[pg_test]
+    #[should_panic = "Token used after it has expired"]
+    fn invalid_exp() {
+        let sk = SigningKey::random(&mut OsRng);
+        let jwk = PublicKey::from(sk.verifying_key()).to_jwk_string();
+
+        crate::jwk_init(1, &jwk);
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        crate::jwt_session_init(&sign_jwt(
+            &sk,
+            r#"{"kid":1}"#,
+            json!({"jti": 1, "nbf": now - 10, "exp": now - 5}),
+        ));
+    }
+
+    #[pg_test]
+    fn valid_time() {
+        let sk = SigningKey::random(&mut OsRng);
+        let jwk = PublicKey::from(sk.verifying_key()).to_jwk_string();
+
+        crate::jwk_init(1, &jwk);
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let header = r#"{"kid":1}"#;
+
+        crate::jwt_session_init(&sign_jwt(
+            &sk,
+            header,
+            json!({"jti": 1, "nbf": now - 10, "exp": now + 10}),
+        ));
+        crate::jwt_session_init(&sign_jwt(&sk, header, json!({"jti": 2, "nbf": now - 10})));
+        crate::jwt_session_init(&sign_jwt(&sk, header, json!({"jti": 3, "exp": now + 10})));
     }
 
     #[pg_test]
@@ -156,20 +264,14 @@ mod tests {
         let sk = SigningKey::random(&mut OsRng);
         let jwk = PublicKey::from(sk.verifying_key()).to_jwk_string();
 
-        crate::init_jwk(1, &jwk);
-        crate::decrypt_jwt(&sign_jwt(
-            &sk,
-            r#"{"pid":1,"txid":1}"#,
-            r#"{"sub":"conradludgate"}"#,
-        ));
-        assert_eq!(crate::neon_get("sub").0, json!("conradludgate"));
+        crate::jwk_init(1, &jwk);
+        let header = r#"{"kid":1}"#;
 
-        crate::decrypt_jwt(&sign_jwt(
-            &sk,
-            r#"{"pid":1,"txid":2}"#,
-            r#"{"sub":"not_conradludgate"}"#,
-        ));
-        assert_eq!(crate::neon_get("sub").0, json!("not_conradludgate"));
+        crate::jwt_session_init(&sign_jwt(&sk, header, r#"{"sub":"foo","jti":1}"#));
+        assert_eq!(crate::user_extract("sub").0, json!("foo"));
+
+        crate::jwt_session_init(&sign_jwt(&sk, header, r#"{"sub":"bar","jti":2}"#));
+        assert_eq!(crate::user_extract("sub").0, json!("bar"));
     }
 }
 
