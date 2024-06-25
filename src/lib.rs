@@ -10,6 +10,7 @@ pub mod auth {
     use p256::ecdsa::signature::Verifier;
     use p256::ecdsa::{Signature, VerifyingKey};
     use p256::elliptic_curve::generic_array::GenericArray;
+    use p256::elliptic_curve::JwkEcKey;
     use p256::PublicKey;
     use pgrx::prelude::*;
     use pgrx::JsonB;
@@ -36,8 +37,9 @@ pub mod auth {
     /// This function will panic if called multiple times per session.
     /// This is to prevent replacing the key mid-session.
     #[pg_extern]
-    pub fn init(kid: i64, s: &str) {
-        let key = PublicKey::from_jwk_str(s).unwrap();
+    pub fn init(kid: i64, s: JsonB) {
+        let key: JwkEcKey = serde_json::from_value(s.0).unwrap();
+        let key = PublicKey::from_jwk(&key).unwrap();
         let key = VerifyingKey::from(key);
         JWK.with(|j| {
             if j.set(Key { kid, key }).is_err() {
@@ -161,7 +163,7 @@ mod tests {
         elliptic_curve::JwkEcKey,
     };
     use p256::{NistP256, PublicKey};
-    use pgrx::prelude::*;
+    use pgrx::{prelude::*, JsonB};
     use rand::rngs::OsRng;
     use serde_json::json;
 
@@ -183,19 +185,20 @@ mod tests {
         let sk = SigningKey::random(&mut OsRng);
         let point = sk.verifying_key().to_encoded_point(false);
         let jwk = JwkEcKey::from_encoded_point::<NistP256>(&point).unwrap();
-        let jwk = serde_json::to_string(&jwk).unwrap();
+        let jwk = serde_json::to_value(&jwk).unwrap();
 
-        auth::init(1, &jwk);
-        auth::init(2, &jwk);
+        auth::init(1, JsonB(jwk.clone()));
+        auth::init(2, JsonB(jwk));
     }
 
     #[pg_test]
     #[should_panic = "Key ID mismatch"]
     fn wrong_pid() {
         let sk = SigningKey::random(&mut OsRng);
-        let jwk = PublicKey::from(sk.verifying_key()).to_jwk_string();
+        let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
+        let jwk = JsonB(serde_json::to_value(&jwk).unwrap());
 
-        auth::init(1, &jwk);
+        auth::init(1, jwk);
         auth::jwt_session_init(&sign_jwt(&sk, r#"{"kid":2}"#, r#"{"jti":1}"#));
     }
 
@@ -203,9 +206,10 @@ mod tests {
     #[should_panic = "Token ID must be strictly monotonically increasing"]
     fn wrong_txid() {
         let sk = SigningKey::random(&mut OsRng);
-        let jwk = PublicKey::from(sk.verifying_key()).to_jwk_string();
+        let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
+        let jwk = JsonB(serde_json::to_value(&jwk).unwrap());
 
-        auth::init(1, &jwk);
+        auth::init(1, jwk);
         auth::jwt_session_init(&sign_jwt(&sk, r#"{"kid":1}"#, r#"{"jti":2}"#));
         auth::jwt_session_init(&sign_jwt(&sk, r#"{"kid":1}"#, r#"{"jti":1}"#));
     }
@@ -214,9 +218,10 @@ mod tests {
     #[should_panic = "Token used before it is ready"]
     fn invalid_nbf() {
         let sk = SigningKey::random(&mut OsRng);
-        let jwk = PublicKey::from(sk.verifying_key()).to_jwk_string();
+        let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
+        let jwk = JsonB(serde_json::to_value(&jwk).unwrap());
 
-        auth::init(1, &jwk);
+        auth::init(1, jwk);
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -233,9 +238,10 @@ mod tests {
     #[should_panic = "Token used after it has expired"]
     fn invalid_exp() {
         let sk = SigningKey::random(&mut OsRng);
-        let jwk = PublicKey::from(sk.verifying_key()).to_jwk_string();
+        let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
+        let jwk = JsonB(serde_json::to_value(&jwk).unwrap());
 
-        auth::init(1, &jwk);
+        auth::init(1, jwk);
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -251,9 +257,10 @@ mod tests {
     #[pg_test]
     fn valid_time() {
         let sk = SigningKey::random(&mut OsRng);
-        let jwk = PublicKey::from(sk.verifying_key()).to_jwk_string();
+        let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
+        let jwk = JsonB(serde_json::to_value(&jwk).unwrap());
 
-        auth::init(1, &jwk);
+        auth::init(1, jwk);
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -274,16 +281,17 @@ mod tests {
     #[pg_test]
     fn test_neon_jwt() {
         let sk = SigningKey::random(&mut OsRng);
-        let jwk = PublicKey::from(sk.verifying_key()).to_jwk_string();
+        let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
+        let jwk = JsonB(serde_json::to_value(&jwk).unwrap());
 
-        auth::init(1, &jwk);
+        auth::init(1, jwk);
         let header = r#"{"kid":1}"#;
 
         auth::jwt_session_init(&sign_jwt(&sk, header, r#"{"sub":"foo","jti":1}"#));
         assert_eq!(auth::user_id(), "foo");
 
         auth::jwt_session_init(&sign_jwt(&sk, header, r#"{"sub":"bar","jti":2}"#));
-        assert_eq!(auth::user_id(), "bar1");
+        assert_eq!(auth::user_id(), "bar");
     }
 }
 
