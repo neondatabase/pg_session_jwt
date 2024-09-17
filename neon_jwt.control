@@ -1,5 +1,0 @@
-comment = 'neon_jwt:  Created by pgrx'
-default_version = '@CARGO_VERSION@'
-module_pathname = '$libdir/neon_jwt'
-relocatable = false
-superuser = true
