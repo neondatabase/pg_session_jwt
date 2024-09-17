@@ -1,0 +1,5 @@
+comment = 'pg_session_jwt:  Created by pgrx'
+default_version = '@CARGO_VERSION@'
+module_pathname = '$libdir/pg_session_jwt'
+relocatable = false
+superuser = true

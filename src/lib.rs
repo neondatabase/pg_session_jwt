@@ -279,7 +279,7 @@ mod tests {
     }
 
     #[pg_test]
-    fn test_neon_jwt() {
+    fn test_pg_session_jwt() {
         let sk = SigningKey::random(&mut OsRng);
         let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
         let jwk = JsonB(serde_json::to_value(&jwk).unwrap());

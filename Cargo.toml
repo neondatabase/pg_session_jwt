@@ -1,5 +1,5 @@
 [package]
-name = "neon_jwt"
+name = "pg_session_jwt"
 version = "0.0.0"
 edition = "2021"
 
