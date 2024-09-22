@@ -47,4 +47,4 @@ For issues, questions, or support, please open an issue on the GitHub repository
 ### Security
 Neon adheres to the [securitytxt.org](https://securitytxt.org/) standard for transparent and efficient security reporting. For details on how to report potential vulnerabilities, please visit our [Security reporting](https://neon.tech/docs/security/security-reporting) page or refer to our [security.txt](https://neon.tech/security.txt) file.
 
-If you have any questions about our security protocols or would like a deeper dive into any aspect, our team is here to help. You can reach us at [security@neon](security@neon.tech).tech.
+If you have any questions about our security protocols or would like a deeper dive into any aspect, our team is here to help. You can reach us at [security@neon.tech](security@neon.tech).
