@@ -28,7 +28,7 @@ Initializes a session with a given key identifier (KID) and JWKS data in JSONB f
 
 Initializes the JWT session with the provided `jwt` as a string.
 
-### 3\. auth.get(s text) → jsonb
+### 3\. auth.session(s text) → jsonb
 
 Retrieves JWT session data as a JSONB object based on the session token.
 
