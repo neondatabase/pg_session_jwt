@@ -2,6 +2,17 @@ use pgrx::prelude::*;
 
 pgrx::pg_module_magic!();
 
+/// inspired from https://docs.rs/pgrx-pg-sys/0.11.4/src/pgrx_pg_sys/submodules/elog.rs.html#243-256
+macro_rules! error_code {
+    ($errcode:expr, $message:expr $(, $detail:expr)? $(,)?) => {{
+        ereport!(PgLogLevel::ERROR, $errcode, $message $(, $detail)?);
+        // ereport with ERROR level will trigger a panic anyway. this
+        // just helps us with type-coercion since ereport returns `()`
+        // but we want `!`.
+        unreachable!()
+    }};
+}
+
 #[pg_schema]
 pub mod auth {
     use std::cell::{OnceCell, RefCell};
@@ -38,41 +49,86 @@ pub mod auth {
     /// This is to prevent replacing the key mid-session.
     #[pg_extern]
     pub fn init(kid: i64, s: JsonB) {
-        let key: JwkEcKey = serde_json::from_value(s.0).unwrap();
-        let key = PublicKey::from_jwk(&key).unwrap();
+        let key: JwkEcKey = serde_json::from_value(s.0).unwrap_or_else(|e| {
+            error_code!(
+                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                "session init requires an ES256 JWK",
+                e.to_string(),
+            )
+        });
+        let key = PublicKey::from_jwk(&key).unwrap_or_else(|p256::elliptic_curve::Error| {
+            error_code!(
+                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                "session init requires an ES256 JWK",
+            )
+        });
         let key = VerifyingKey::from(key);
         JWK.with(|j| {
             if j.set(Key { kid, key }).is_err() {
-                panic!("JWK state can only be set once per session.")
+                error_code!(
+                    PgSqlErrorCode::ERRCODE_UNIQUE_VIOLATION,
+                    "JWK state can only be set once per session.",
+                )
             }
         })
     }
 
     fn verify_signature(key: &Key, body: &str, sig: &str) {
         let mut sig_bytes = GenericArray::default();
-        Base64UrlUnpadded::decode(sig, &mut sig_bytes).unwrap();
-        let sig = Signature::from_bytes(&sig_bytes).unwrap();
+        Base64UrlUnpadded::decode(sig, &mut sig_bytes).unwrap_or_else(|_| {
+            error_code!(
+                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                "invalid JWT signature encoding",
+            )
+        });
+        let sig = Signature::from_bytes(&sig_bytes).unwrap_or_else(|_| {
+            error_code!(
+                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                "invalid JWT signature encoding",
+            )
+        });
 
-        key.key.verify(body.as_bytes(), &sig).unwrap();
+        key.key.verify(body.as_bytes(), &sig).unwrap_or_else(|_| {
+            error_code!(
+                PgSqlErrorCode::ERRCODE_CHECK_VIOLATION,
+                "invalid JWT signature",
+            )
+        });
     }
 
     fn verify_key_id(key: &Key, header: &Object) {
-        let kid = header["kid"]
-            .as_i64()
-            .expect("JWT header must contain a valid 'kid' (key ID)");
+        let kid = header
+            .get("kid")
+            .and_then(|x| x.as_i64())
+            .unwrap_or_else(|| {
+                error_code!(
+                    PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                    "JWT header must contain a valid 'kid' (key ID)",
+                )
+            });
+
         if key.kid != kid {
-            panic!("Key ID mismatch");
+            error_code!(PgSqlErrorCode::ERRCODE_CHECK_VIOLATION, "Key ID mismatch");
         }
     }
 
     fn verify_token_id(payload: &Object) -> i64 {
-        let jti = payload["jti"]
-            .as_i64()
-            .expect("JWT payload must contain a valid 'jti' (JWT ID)");
+        let jti = payload
+            .get("jti")
+            .and_then(|x| x.as_i64())
+            .unwrap_or_else(|| {
+                error_code!(
+                    PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                    "JWT payload must contain a valid 'jti' (JWT ID)",
+                )
+            });
 
         JTI.with_borrow(|t| {
             if jti <= *t {
-                panic!("Token ID must be strictly monotonically increasing.");
+                error_code!(
+                    PgSqlErrorCode::ERRCODE_CHECK_VIOLATION,
+                    "Token ID must be strictly monotonically increasing."
+                );
             }
         });
 
@@ -83,20 +139,43 @@ pub mod auth {
         let now = now()
             .to_utc()
             .extract_part(DateTimeParts::Epoch)
-            .expect("could not get current unix epoch");
+            .unwrap_or_else(|| {
+                error_code!(
+                    PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                    "could not get current unix epoch",
+                )
+            });
         if let Some(nbf) = payload.get("nbf") {
-            let nbf = nbf.as_i64().expect(
-                "'nbf' (Not Before) must be an integer representing seconds since unix epoch",
-            );
+            let nbf = nbf.as_i64().unwrap_or_else(|| {
+                error_code!(
+                    PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                    "'nbf' (Not Before) must be an integer representing seconds since unix epoch",
+                )
+            });
             let nbf = AnyNumeric::from(nbf);
-            assert!(nbf < now, "Token used before it is ready")
+
+            if now < nbf {
+                error_code!(
+                    PgSqlErrorCode::ERRCODE_CHECK_VIOLATION,
+                    "Token used before it is ready",
+                )
+            }
         }
         if let Some(exp) = payload.get("exp") {
-            let exp = exp.as_i64().expect(
-                "'exp' (Expiration) must be an integer representing seconds since unix epoch",
-            );
+            let exp = exp.as_i64().unwrap_or_else(|| {
+                error_code!(
+                    PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                    "'exp' (Expiration) must be an integer representing seconds since unix epoch",
+                )
+            });
             let exp = AnyNumeric::from(exp);
-            assert!(now < exp, "Token used after it has expired")
+
+            if exp < now {
+                error_code!(
+                    PgSqlErrorCode::ERRCODE_CHECK_VIOLATION,
+                    "Token used after it has expired",
+                )
+            }
         }
     }
 
@@ -107,9 +186,28 @@ pub mod auth {
     /// This function will panic if the JWT could not be verified.
     #[pg_extern]
     pub fn jwt_session_init(s: &str) {
-        let key = JWK.with(|b| b.get().expect("JWK state has not been initialised").clone());
-        let (body, sig) = s.rsplit_once('.').unwrap();
-        let (header, payload) = body.split_once('.').unwrap();
+        let key = JWK.with(|b| {
+            b.get()
+                .unwrap_or_else(|| {
+                    error_code!(
+                        PgSqlErrorCode::ERRCODE_NOT_NULL_VIOLATION,
+                        "JWK state has not been initialised",
+                    )
+                })
+                .clone()
+        });
+        let (body, sig) = s.rsplit_once('.').unwrap_or_else(|| {
+            error_code!(
+                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                "invalid JWT encoding",
+            )
+        });
+        let (header, payload) = body.split_once('.').unwrap_or_else(|| {
+            error_code!(
+                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                "invalid JWT encoding",
+            )
+        });
         let header: Object = json_base64_decode(header);
 
         verify_key_id(&key, &header);
@@ -140,13 +238,28 @@ pub mod auth {
     pub fn user_id() -> String {
         match session("sub").0 {
             serde_json::Value::String(s) => s,
-            _ => panic!("invalid subject claim in the JWT"),
+            _ => error_code!(
+                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                "invalid subject claim in the JWT"
+            ),
         }
     }
 
     fn json_base64_decode<D: DeserializeOwned>(s: &str) -> D {
-        let r = Decoder::<Base64UrlUnpadded>::new(s.as_bytes()).unwrap();
-        serde_json::from_reader(r).unwrap()
+        let r = Decoder::<Base64UrlUnpadded>::new(s.as_bytes()).unwrap_or_else(|e| {
+            error_code!(
+                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                "could not decode JWT component",
+                e.to_string(),
+            )
+        });
+        serde_json::from_reader(r).unwrap_or_else(|e| {
+            error_code!(
+                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                "could not parse JWT component",
+                e.to_string(),
+            )
+        })
     }
 }
 
