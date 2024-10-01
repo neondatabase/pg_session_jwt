@@ -126,7 +126,7 @@ pub mod auth {
 
     /// Extract a value from the shared state.
     #[pg_extern]
-    pub fn get(s: &str) -> JsonB {
+    pub fn session(s: &str) -> JsonB {
         JWT.with_borrow(|j| {
             JsonB(
                 j.as_ref()
@@ -138,7 +138,7 @@ pub mod auth {
 
     #[pg_extern]
     pub fn user_id() -> String {
-        match get("sub").0 {
+        match session("sub").0 {
             serde_json::Value::String(s) => s,
             _ => panic!("invalid subject claim in the JWT"),
         }
