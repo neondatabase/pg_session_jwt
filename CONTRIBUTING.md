@@ -21,6 +21,17 @@ cargo pgrx run pg16
 ```
 
 Eventually you will be logged into postgres so now you can run:
+```sql
+CREATE EXTENSION pg_session_jwt;
 ```
+
+Now you can explore available functions with
+```sql
+\dx auth.*
+```
+
+If you introduce new function make sure to reload the extension with
+```sql
+DROP EXTENSION pg_session_jwt;
 CREATE EXTENSION pg_session_jwt;
 ```
