@@ -189,7 +189,7 @@ pub mod auth {
 
     #[pg_extern]
     pub fn foo() -> String {
-        crate::gucs::AUTH_FOO.get().unwrap().to_owned().into_string().unwrap()
+        crate::gucs::NEON_AUTH_JWT.get().unwrap().to_owned().into_string().unwrap()
     }
 
     /// Decrypt the JWT and store it.
