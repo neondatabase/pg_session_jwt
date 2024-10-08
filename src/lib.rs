@@ -1,3 +1,5 @@
+mod gucs;
+
 use pgrx::prelude::*;
 
 pgrx::pg_module_magic!();
@@ -11,6 +13,12 @@ macro_rules! error_code {
         // but we want `!`.
         unreachable!()
     }};
+}
+
+#[allow(non_snake_case)]
+#[pg_guard]
+pub unsafe extern "C" fn _PG_init() {
+    gucs::init();
 }
 
 #[pg_schema]
@@ -177,6 +185,11 @@ pub mod auth {
                 )
             }
         }
+    }
+
+    #[pg_extern]
+    pub fn foo() -> String {
+        crate::gucs::AUTH_FOO.get().unwrap().to_owned().into_string().unwrap()
     }
 
     /// Decrypt the JWT and store it.
