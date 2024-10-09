@@ -35,6 +35,8 @@ pub mod auth {
     use pgrx::JsonB;
     use serde::de::DeserializeOwned;
 
+    use crate::gucs::{NEON_AUTH_JWK, NEON_AUTH_JWK_RUNTIME_PARAM};
+
     type Object = serde_json::Map<String, serde_json::Value>;
 
     thread_local! {
@@ -56,8 +58,20 @@ pub mod auth {
     /// This function will panic if called multiple times per session.
     /// This is to prevent replacing the key mid-session.
     #[pg_extern]
-    pub fn init(kid: i64, s: JsonB) {
-        let key: JwkEcKey = serde_json::from_value(s.0).unwrap_or_else(|e| {
+    pub fn init(kid: i64) {
+        let jwk = NEON_AUTH_JWK.get().unwrap_or_else(|| {
+            error_code!(
+                PgSqlErrorCode::ERRCODE_NO_DATA,
+                format!("Missing runtime parameter: {}", NEON_AUTH_JWK_RUNTIME_PARAM)
+            )
+        }).to_str().unwrap_or_else(|e| {
+            error_code!(
+                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                format!("Couldn't parse {}", NEON_AUTH_JWK_RUNTIME_PARAM),
+                e.to_string()
+            )
+        });
+        let key: JwkEcKey = serde_json::from_str(jwk).unwrap_or_else(|e| {
             error_code!(
                 PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
                 "session init requires an ES256 JWK",
@@ -294,6 +308,11 @@ mod tests {
     use serde_json::json;
 
     use crate::auth;
+    use crate::gucs::NEON_AUTH_JWK_RUNTIME_PARAM;
+
+    fn set_jwk_in_guc(key: String) {
+        Spi::run(format!("SET {} = '{}'", NEON_AUTH_JWK_RUNTIME_PARAM, key).as_str()).unwrap();
+    }
 
     fn sign_jwt(sk: &SigningKey, header: &str, payload: impl Display) -> String {
         let header = Base64UrlUnpadded::encode_string(header.as_bytes());
@@ -312,9 +331,10 @@ mod tests {
         let point = sk.verifying_key().to_encoded_point(false);
         let jwk = JwkEcKey::from_encoded_point::<NistP256>(&point).unwrap();
         let jwk = serde_json::to_value(&jwk).unwrap();
+        set_jwk_in_guc(serde_json::to_string(&jwk).unwrap());
 
-        auth::init(1, JsonB(jwk.clone()));
-        auth::init(2, JsonB(jwk));
+        auth::init(1);
+        auth::init(2);
     }
 
     #[pg_test]
@@ -322,9 +342,10 @@ mod tests {
     fn wrong_pid() {
         let sk = SigningKey::random(&mut OsRng);
         let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
-        let jwk = JsonB(serde_json::to_value(&jwk).unwrap());
+        let jwk = serde_json::to_string(&jwk).unwrap();
+        set_jwk_in_guc(jwk);
 
-        auth::init(1, jwk);
+        auth::init(1);
         auth::jwt_session_init(&sign_jwt(&sk, r#"{"kid":2}"#, r#"{"jti":1}"#));
     }
 
@@ -333,9 +354,10 @@ mod tests {
     fn wrong_txid() {
         let sk = SigningKey::random(&mut OsRng);
         let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
-        let jwk = JsonB(serde_json::to_value(&jwk).unwrap());
+        let jwk = serde_json::to_string(&jwk).unwrap();
+        set_jwk_in_guc(jwk);
 
-        auth::init(1, jwk);
+        auth::init(1);
         auth::jwt_session_init(&sign_jwt(&sk, r#"{"kid":1}"#, r#"{"jti":2}"#));
         auth::jwt_session_init(&sign_jwt(&sk, r#"{"kid":1}"#, r#"{"jti":1}"#));
     }
@@ -345,9 +367,10 @@ mod tests {
     fn invalid_nbf() {
         let sk = SigningKey::random(&mut OsRng);
         let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
-        let jwk = JsonB(serde_json::to_value(&jwk).unwrap());
+        let jwk = serde_json::to_string(&jwk).unwrap();
+        set_jwk_in_guc(jwk);
 
-        auth::init(1, jwk);
+        auth::init(1);
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -365,9 +388,10 @@ mod tests {
     fn invalid_exp() {
         let sk = SigningKey::random(&mut OsRng);
         let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
-        let jwk = JsonB(serde_json::to_value(&jwk).unwrap());
+        let jwk = serde_json::to_string(&jwk).unwrap();
+        set_jwk_in_guc(jwk);
 
-        auth::init(1, jwk);
+        auth::init(1);
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -384,9 +408,10 @@ mod tests {
     fn valid_time() {
         let sk = SigningKey::random(&mut OsRng);
         let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
-        let jwk = JsonB(serde_json::to_value(&jwk).unwrap());
+        let jwk = serde_json::to_string(&jwk).unwrap();
+        set_jwk_in_guc(jwk);
 
-        auth::init(1, jwk);
+        auth::init(1);
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -408,9 +433,10 @@ mod tests {
     fn test_pg_session_jwt() {
         let sk = SigningKey::random(&mut OsRng);
         let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
-        let jwk = JsonB(serde_json::to_value(&jwk).unwrap());
+        let jwk = serde_json::to_string(&jwk).unwrap();
+        set_jwk_in_guc(jwk);
 
-        auth::init(1, jwk);
+        auth::init(1);
         let header = r#"{"kid":1}"#;
 
         auth::jwt_session_init(&sign_jwt(&sk, header, r#"{"sub":"foo","jti":1}"#));
