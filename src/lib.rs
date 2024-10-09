@@ -347,11 +347,18 @@ mod tests {
     use serde_json::json;
 
     use crate::auth;
-    use crate::gucs::{NEON_AUTH_JWK_RUNTIME_PARAM, NEON_AUTH_JWT, NEON_AUTH_KID_RUNTIME_PARAM};
+    use crate::gucs::{
+        NEON_AUTH_JWK_RUNTIME_PARAM, NEON_AUTH_JWT, NEON_AUTH_JWT_RUNTIME_PARAM,
+        NEON_AUTH_KID_RUNTIME_PARAM,
+    };
 
     fn set_jwk_in_guc(kid: i32, key: String) {
         Spi::run(format!("SET {} = {}", NEON_AUTH_KID_RUNTIME_PARAM, kid).as_str()).unwrap();
         Spi::run(format!("SET {} = '{}'", NEON_AUTH_JWK_RUNTIME_PARAM, key).as_str()).unwrap();
+    }
+
+    fn set_jwt_in_guc(jwt: String) {
+        Spi::run(format!("SET {} = '{}'", NEON_AUTH_JWT_RUNTIME_PARAM, jwt).as_str()).unwrap();
     }
 
     fn sign_jwt(sk: &SigningKey, header: &str, payload: impl Display) -> String {
@@ -490,6 +497,21 @@ mod tests {
         auth::jwt_session_init(&jwt);
         assert_eq!(NEON_AUTH_JWT.get().unwrap().to_str().unwrap(), &jwt);
         assert_eq!(auth::user_id(), "bar");
+    }
+
+    // bgworker process exits after execution, because of that we don't need to test case for more
+    // than one JWT
+    #[pg_test]
+    fn test_bgworker() {
+        let sk = SigningKey::random(&mut OsRng);
+        let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
+        let jwk = serde_json::to_string(&jwk).unwrap();
+        let header = r#"{"kid":1}"#;
+        let jwt = sign_jwt(&sk, header, r#"{"sub":"foo","jti":1}"#);
+        set_jwk_in_guc(1, jwk);
+        set_jwt_in_guc(jwt);
+
+        assert_eq!(auth::user_id(), "foo");
     }
 }
 
