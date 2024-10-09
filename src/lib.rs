@@ -252,6 +252,9 @@ pub mod auth {
     /// Extract a value from the shared state.
     #[pg_extern]
     pub fn session(s: &str) -> JsonB {
+        // todo: check if JWK is set in thread_local, if not assume its bgworker and call dedicated
+        // function that uses JWT_CACHE and relies only on runtime parameters (neon.auth.jwk and
+        // neon.auth.jwt)
         JWT.with_borrow(|j| {
             JsonB(
                 j.as_ref()
