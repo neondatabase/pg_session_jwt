@@ -68,7 +68,7 @@ pub mod auth {
             error_code!(
                 PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
                 format!("Couldn't parse {}", NEON_AUTH_JWK_RUNTIME_PARAM),
-                e.to_string()
+                e.to_string(),
             )
         });
         let key: JwkEcKey = serde_json::from_str(jwk).unwrap_or_else(|e| {
@@ -201,11 +201,6 @@ pub mod auth {
         }
     }
 
-    #[pg_extern]
-    pub fn foo() -> String {
-        crate::gucs::NEON_AUTH_JWT.get().unwrap().to_owned().into_string().unwrap()
-    }
-
     /// Decrypt the JWT and store it.
     ///
     /// # Panics
@@ -314,7 +309,7 @@ mod tests {
         elliptic_curve::JwkEcKey,
     };
     use p256::{NistP256, PublicKey};
-    use pgrx::{prelude::*, JsonB};
+    use pgrx::prelude::*;
     use rand::rngs::OsRng;
     use serde_json::json;
 
