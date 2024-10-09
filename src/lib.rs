@@ -37,6 +37,7 @@ pub mod auth {
 
     use crate::gucs::{
         NEON_AUTH_JWK, NEON_AUTH_JWK_RUNTIME_PARAM, NEON_AUTH_JWT, NEON_AUTH_JWT_RUNTIME_PARAM,
+        NEON_AUTH_KID,
     };
 
     type Object = serde_json::Map<String, serde_json::Value>;
@@ -60,7 +61,8 @@ pub mod auth {
     /// This function will panic if called multiple times per session.
     /// This is to prevent replacing the key mid-session.
     #[pg_extern]
-    pub fn init(kid: i64) {
+    pub fn init() {
+        let kid: i64 = NEON_AUTH_KID.get().into();
         let jwk = NEON_AUTH_JWK
             .get()
             .unwrap_or_else(|| {
@@ -284,7 +286,7 @@ pub mod auth {
         JWK.with(|j| {
             if j.get().is_none() {
                 // assuming that running as bgworker
-                init(1);
+                init();
                 set_jwt_cache();
             }
         });
@@ -345,9 +347,10 @@ mod tests {
     use serde_json::json;
 
     use crate::auth;
-    use crate::gucs::{NEON_AUTH_JWK_RUNTIME_PARAM, NEON_AUTH_JWT};
+    use crate::gucs::{NEON_AUTH_JWK_RUNTIME_PARAM, NEON_AUTH_JWT, NEON_AUTH_KID_RUNTIME_PARAM};
 
-    fn set_jwk_in_guc(key: String) {
+    fn set_jwk_in_guc(kid: i32, key: String) {
+        Spi::run(format!("SET {} = {}", NEON_AUTH_KID_RUNTIME_PARAM, kid).as_str()).unwrap();
         Spi::run(format!("SET {} = '{}'", NEON_AUTH_JWK_RUNTIME_PARAM, key).as_str()).unwrap();
     }
 
@@ -368,10 +371,12 @@ mod tests {
         let point = sk.verifying_key().to_encoded_point(false);
         let jwk = JwkEcKey::from_encoded_point::<NistP256>(&point).unwrap();
         let jwk = serde_json::to_value(&jwk).unwrap();
-        set_jwk_in_guc(serde_json::to_string(&jwk).unwrap());
 
-        auth::init(1);
-        auth::init(2);
+        set_jwk_in_guc(1, serde_json::to_string(&jwk).unwrap());
+        auth::init();
+
+        set_jwk_in_guc(2, serde_json::to_string(&jwk).unwrap());
+        auth::init();
     }
 
     #[pg_test]
@@ -380,9 +385,9 @@ mod tests {
         let sk = SigningKey::random(&mut OsRng);
         let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
         let jwk = serde_json::to_string(&jwk).unwrap();
-        set_jwk_in_guc(jwk);
+        set_jwk_in_guc(1, jwk);
 
-        auth::init(1);
+        auth::init();
         auth::jwt_session_init(&sign_jwt(&sk, r#"{"kid":2}"#, r#"{"jti":1}"#));
     }
 
@@ -392,9 +397,9 @@ mod tests {
         let sk = SigningKey::random(&mut OsRng);
         let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
         let jwk = serde_json::to_string(&jwk).unwrap();
-        set_jwk_in_guc(jwk);
+        set_jwk_in_guc(1, jwk);
 
-        auth::init(1);
+        auth::init();
         auth::jwt_session_init(&sign_jwt(&sk, r#"{"kid":1}"#, r#"{"jti":2}"#));
         auth::jwt_session_init(&sign_jwt(&sk, r#"{"kid":1}"#, r#"{"jti":1}"#));
     }
@@ -405,9 +410,9 @@ mod tests {
         let sk = SigningKey::random(&mut OsRng);
         let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
         let jwk = serde_json::to_string(&jwk).unwrap();
-        set_jwk_in_guc(jwk);
+        set_jwk_in_guc(1, jwk);
 
-        auth::init(1);
+        auth::init();
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -426,9 +431,9 @@ mod tests {
         let sk = SigningKey::random(&mut OsRng);
         let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
         let jwk = serde_json::to_string(&jwk).unwrap();
-        set_jwk_in_guc(jwk);
+        set_jwk_in_guc(1, jwk);
 
-        auth::init(1);
+        auth::init();
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -446,9 +451,9 @@ mod tests {
         let sk = SigningKey::random(&mut OsRng);
         let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
         let jwk = serde_json::to_string(&jwk).unwrap();
-        set_jwk_in_guc(jwk);
+        set_jwk_in_guc(1, jwk);
 
-        auth::init(1);
+        auth::init();
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -471,9 +476,9 @@ mod tests {
         let sk = SigningKey::random(&mut OsRng);
         let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
         let jwk = serde_json::to_string(&jwk).unwrap();
-        set_jwk_in_guc(jwk);
+        set_jwk_in_guc(1, jwk);
 
-        auth::init(1);
+        auth::init();
         let header = r#"{"kid":1}"#;
 
         let jwt = sign_jwt(&sk, header, r#"{"sub":"foo","jti":1}"#);
