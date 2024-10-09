@@ -35,7 +35,9 @@ pub mod auth {
     use pgrx::JsonB;
     use serde::de::DeserializeOwned;
 
-    use crate::gucs::{NEON_AUTH_JWK, NEON_AUTH_JWK_RUNTIME_PARAM, NEON_AUTH_JWT, NEON_AUTH_JWT_RUNTIME_PARAM};
+    use crate::gucs::{
+        NEON_AUTH_JWK, NEON_AUTH_JWK_RUNTIME_PARAM, NEON_AUTH_JWT, NEON_AUTH_JWT_RUNTIME_PARAM,
+    };
 
     type Object = serde_json::Map<String, serde_json::Value>;
 
@@ -59,18 +61,22 @@ pub mod auth {
     /// This is to prevent replacing the key mid-session.
     #[pg_extern]
     pub fn init(kid: i64) {
-        let jwk = NEON_AUTH_JWK.get().unwrap_or_else(|| {
-            error_code!(
-                PgSqlErrorCode::ERRCODE_NO_DATA,
-                format!("Missing runtime parameter: {}", NEON_AUTH_JWK_RUNTIME_PARAM)
-            )
-        }).to_str().unwrap_or_else(|e| {
-            error_code!(
-                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
-                format!("Couldn't parse {}", NEON_AUTH_JWK_RUNTIME_PARAM),
-                e.to_string(),
-            )
-        });
+        let jwk = NEON_AUTH_JWK
+            .get()
+            .unwrap_or_else(|| {
+                error_code!(
+                    PgSqlErrorCode::ERRCODE_NO_DATA,
+                    format!("Missing runtime parameter: {}", NEON_AUTH_JWK_RUNTIME_PARAM)
+                )
+            })
+            .to_str()
+            .unwrap_or_else(|e| {
+                error_code!(
+                    PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                    format!("Couldn't parse {}", NEON_AUTH_JWK_RUNTIME_PARAM),
+                    e.to_string(),
+                )
+            });
         let key: JwkEcKey = serde_json::from_str(jwk).unwrap_or_else(|e| {
             error_code!(
                 PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
@@ -208,29 +214,34 @@ pub mod auth {
     /// This function will panic if the JWT could not be verified.
     #[pg_extern]
     pub fn jwt_session_init(jwt: &str) {
-        Spi::run(format!("SET {} = '{}'", NEON_AUTH_JWT_RUNTIME_PARAM, jwt).as_str()).unwrap_or_else(|e| {
-            error_code!(
-                PgSqlErrorCode::ERRCODE_S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED,
-                format!("Couldn't set {}", NEON_AUTH_JWT_RUNTIME_PARAM),
-                e.to_string(),
-            )
-        });
+        Spi::run(format!("SET {} = '{}'", NEON_AUTH_JWT_RUNTIME_PARAM, jwt).as_str())
+            .unwrap_or_else(|e| {
+                error_code!(
+                    PgSqlErrorCode::ERRCODE_S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED,
+                    format!("Couldn't set {}", NEON_AUTH_JWT_RUNTIME_PARAM),
+                    e.to_string(),
+                )
+            });
         set_jwt_cache()
     }
 
     fn set_jwt_cache() {
-        let jwt = NEON_AUTH_JWT.get().unwrap_or_else(|| {
-            error_code!(
-                PgSqlErrorCode::ERRCODE_NO_DATA,
-                format!("Missing runtime parameter: {}", NEON_AUTH_JWT_RUNTIME_PARAM)
-            )
-        }).to_str().unwrap_or_else(|e| {
-            error_code!(
-                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
-                format!("Couldn't parse {}", NEON_AUTH_JWT_RUNTIME_PARAM),
-                e.to_string(),
-            )
-        });
+        let jwt = NEON_AUTH_JWT
+            .get()
+            .unwrap_or_else(|| {
+                error_code!(
+                    PgSqlErrorCode::ERRCODE_NO_DATA,
+                    format!("Missing runtime parameter: {}", NEON_AUTH_JWT_RUNTIME_PARAM)
+                )
+            })
+            .to_str()
+            .unwrap_or_else(|e| {
+                error_code!(
+                    PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                    format!("Couldn't parse {}", NEON_AUTH_JWT_RUNTIME_PARAM),
+                    e.to_string(),
+                )
+            });
         let key = JWK.with(|b| {
             b.get()
                 .unwrap_or_else(|| {
