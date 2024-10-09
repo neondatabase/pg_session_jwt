@@ -512,6 +512,7 @@ mod tests {
         set_jwt_in_guc(jwt);
 
         assert_eq!(auth::user_id(), "foo");
+        assert_eq!(auth::user_id(), "foo");
     }
 }
 
