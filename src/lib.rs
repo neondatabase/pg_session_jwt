@@ -314,7 +314,7 @@ mod tests {
     use serde_json::json;
 
     use crate::auth;
-    use crate::gucs::NEON_AUTH_JWK_RUNTIME_PARAM;
+    use crate::gucs::{NEON_AUTH_JWK_RUNTIME_PARAM, NEON_AUTH_JWT};
 
     fn set_jwk_in_guc(key: String) {
         Spi::run(format!("SET {} = '{}'", NEON_AUTH_JWK_RUNTIME_PARAM, key).as_str()).unwrap();
@@ -445,10 +445,14 @@ mod tests {
         auth::init(1);
         let header = r#"{"kid":1}"#;
 
-        auth::jwt_session_init(&sign_jwt(&sk, header, r#"{"sub":"foo","jti":1}"#));
+        let jwt = sign_jwt(&sk, header, r#"{"sub":"foo","jti":1}"#);
+        auth::jwt_session_init(&jwt);
+        assert_eq!(NEON_AUTH_JWT.get().unwrap().to_str().unwrap(), &jwt);
         assert_eq!(auth::user_id(), "foo");
 
-        auth::jwt_session_init(&sign_jwt(&sk, header, r#"{"sub":"bar","jti":2}"#));
+        let jwt = sign_jwt(&sk, header, r#"{"sub":"bar","jti":2}"#);
+        auth::jwt_session_init(&jwt);
+        assert_eq!(NEON_AUTH_JWT.get().unwrap().to_str().unwrap(), &jwt);
         assert_eq!(auth::user_id(), "bar");
     }
 }
