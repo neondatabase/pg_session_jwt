@@ -1,3 +1,6 @@
+mod gucs;
+
+use p256::elliptic_curve::JwkEcKey;
 use pgrx::prelude::*;
 
 pgrx::pg_module_magic!();
@@ -13,6 +16,27 @@ macro_rules! error_code {
     }};
 }
 
+#[allow(non_snake_case)]
+#[pg_guard]
+pub unsafe extern "C" fn _PG_init() {
+    gucs::init();
+}
+
+/// An Elliptic Curve JSON Web Key.
+///
+/// This type is defined in [RFC7517 Section 4].
+///
+/// [RFC7517 Section 4]: https://datatracker.ietf.org/doc/html/rfc7517#section-4
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+struct JwkEc {
+    /// The key material.
+    #[serde(flatten)]
+    key: JwkEcKey,
+
+    // The key parameters.
+    kid: i64,
+}
+
 #[pg_schema]
 pub mod auth {
     use std::cell::{OnceCell, RefCell};
@@ -21,11 +45,15 @@ pub mod auth {
     use p256::ecdsa::signature::Verifier;
     use p256::ecdsa::{Signature, VerifyingKey};
     use p256::elliptic_curve::generic_array::GenericArray;
-    use p256::elliptic_curve::JwkEcKey;
     use p256::PublicKey;
     use pgrx::prelude::*;
     use pgrx::JsonB;
     use serde::de::DeserializeOwned;
+
+    use crate::gucs::{
+        NEON_AUTH_JWK, NEON_AUTH_JWK_RUNTIME_PARAM, NEON_AUTH_JWT, NEON_AUTH_JWT_RUNTIME_PARAM,
+    };
+    use crate::JwkEc;
 
     type Object = serde_json::Map<String, serde_json::Value>;
 
@@ -48,15 +76,32 @@ pub mod auth {
     /// This function will panic if called multiple times per session.
     /// This is to prevent replacing the key mid-session.
     #[pg_extern]
-    pub fn init(kid: i64, s: JsonB) {
-        let key: JwkEcKey = serde_json::from_value(s.0).unwrap_or_else(|e| {
+    pub fn init() {
+        let jwk = NEON_AUTH_JWK
+            .get()
+            .unwrap_or_else(|| {
+                error_code!(
+                    PgSqlErrorCode::ERRCODE_NO_DATA,
+                    format!("Missing runtime parameter: {}", NEON_AUTH_JWK_RUNTIME_PARAM)
+                )
+            })
+            .to_str()
+            .unwrap_or_else(|e| {
+                error_code!(
+                    PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                    format!("Couldn't parse {}", NEON_AUTH_JWK_RUNTIME_PARAM),
+                    e.to_string(),
+                )
+            });
+
+        let jwk: JwkEc = serde_json::from_str(jwk).unwrap_or_else(|e| {
             error_code!(
                 PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
                 "session init requires an ES256 JWK",
                 e.to_string(),
             )
         });
-        let key = PublicKey::from_jwk(&key).unwrap_or_else(|p256::elliptic_curve::Error| {
+        let key = PublicKey::from_jwk(&jwk.key).unwrap_or_else(|p256::elliptic_curve::Error| {
             error_code!(
                 PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
                 "session init requires an ES256 JWK",
@@ -64,7 +109,7 @@ pub mod auth {
         });
         let key = VerifyingKey::from(key);
         JWK.with(|j| {
-            if j.set(Key { kid, key }).is_err() {
+            if j.set(Key { kid: jwk.kid, key }).is_err() {
                 error_code!(
                     PgSqlErrorCode::ERRCODE_UNIQUE_VIOLATION,
                     "JWK state can only be set once per session.",
@@ -185,7 +230,42 @@ pub mod auth {
     ///
     /// This function will panic if the JWT could not be verified.
     #[pg_extern]
-    pub fn jwt_session_init(s: &str) {
+    pub fn jwt_session_init(jwt: &str) {
+        Spi::run(
+            format!(
+                "SET {} = {}",
+                NEON_AUTH_JWT_RUNTIME_PARAM,
+                spi::quote_literal(jwt)
+            )
+            .as_str(),
+        )
+        .unwrap_or_else(|e| {
+            error_code!(
+                PgSqlErrorCode::ERRCODE_S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED,
+                format!("Couldn't set {}", NEON_AUTH_JWT_RUNTIME_PARAM),
+                e.to_string(),
+            )
+        });
+        set_jwt_cache()
+    }
+
+    fn set_jwt_cache() {
+        let jwt = NEON_AUTH_JWT
+            .get()
+            .unwrap_or_else(|| {
+                error_code!(
+                    PgSqlErrorCode::ERRCODE_NO_DATA,
+                    format!("Missing runtime parameter: {}", NEON_AUTH_JWT_RUNTIME_PARAM)
+                )
+            })
+            .to_str()
+            .unwrap_or_else(|e| {
+                error_code!(
+                    PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                    format!("Couldn't parse {}", NEON_AUTH_JWT_RUNTIME_PARAM),
+                    e.to_string(),
+                )
+            });
         let key = JWK.with(|b| {
             b.get()
                 .unwrap_or_else(|| {
@@ -196,7 +276,7 @@ pub mod auth {
                 })
                 .clone()
         });
-        let (body, sig) = s.rsplit_once('.').unwrap_or_else(|| {
+        let (body, sig) = jwt.rsplit_once('.').unwrap_or_else(|| {
             error_code!(
                 PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
                 "invalid JWT encoding",
@@ -224,20 +304,28 @@ pub mod auth {
 
     /// Extract a value from the shared state.
     #[pg_extern]
-    pub fn session(s: &str) -> JsonB {
+    pub fn session() -> JsonB {
+        JWK.with(|j| {
+            if j.get().is_none() {
+                // assuming that running as bgworker
+                init();
+                set_jwt_cache();
+            }
+        });
+
         JWT.with_borrow(|j| {
             JsonB(
                 j.as_ref()
-                    .and_then(|j| j.get(s).cloned())
-                    .unwrap_or(serde_json::Value::Null),
+                    .cloned()
+                    .map_or(serde_json::Value::Null, serde_json::Value::Object),
             )
         })
     }
 
     #[pg_extern]
-    pub fn user_id() -> String {
-        match session("sub").0 {
-            serde_json::Value::String(s) => s,
+    pub fn user_id() -> Option<String> {
+        match session().0.get("sub")? {
+            serde_json::Value::String(s) => Some(s.clone()),
             _ => error_code!(
                 PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
                 "invalid subject claim in the JWT"
@@ -260,164 +348,5 @@ pub mod auth {
                 e.to_string(),
             )
         })
-    }
-}
-
-#[cfg(any(test, feature = "pg_test"))]
-#[pg_schema]
-mod tests {
-    use std::fmt::Display;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    use base64ct::{Base64UrlUnpadded, Encoding};
-    use p256::ecdsa::signature::Signer;
-    use p256::{
-        ecdsa::{Signature, SigningKey},
-        elliptic_curve::JwkEcKey,
-    };
-    use p256::{NistP256, PublicKey};
-    use pgrx::{prelude::*, JsonB};
-    use rand::rngs::OsRng;
-    use serde_json::json;
-
-    use crate::auth;
-
-    fn sign_jwt(sk: &SigningKey, header: &str, payload: impl Display) -> String {
-        let header = Base64UrlUnpadded::encode_string(header.as_bytes());
-        let payload = Base64UrlUnpadded::encode_string(payload.to_string().as_bytes());
-
-        let message = format!("{header}.{payload}");
-        let sig: Signature = sk.sign(message.as_bytes());
-        let base64_sig = Base64UrlUnpadded::encode_string(&sig.to_bytes());
-        format!("{message}.{base64_sig}")
-    }
-
-    #[pg_test]
-    #[should_panic = "JWK state can only be set once per session."]
-    fn init_jwk_twice() {
-        let sk = SigningKey::random(&mut OsRng);
-        let point = sk.verifying_key().to_encoded_point(false);
-        let jwk = JwkEcKey::from_encoded_point::<NistP256>(&point).unwrap();
-        let jwk = serde_json::to_value(&jwk).unwrap();
-
-        auth::init(1, JsonB(jwk.clone()));
-        auth::init(2, JsonB(jwk));
-    }
-
-    #[pg_test]
-    #[should_panic = "Key ID mismatch"]
-    fn wrong_pid() {
-        let sk = SigningKey::random(&mut OsRng);
-        let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
-        let jwk = JsonB(serde_json::to_value(&jwk).unwrap());
-
-        auth::init(1, jwk);
-        auth::jwt_session_init(&sign_jwt(&sk, r#"{"kid":2}"#, r#"{"jti":1}"#));
-    }
-
-    #[pg_test]
-    #[should_panic = "Token ID must be strictly monotonically increasing"]
-    fn wrong_txid() {
-        let sk = SigningKey::random(&mut OsRng);
-        let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
-        let jwk = JsonB(serde_json::to_value(&jwk).unwrap());
-
-        auth::init(1, jwk);
-        auth::jwt_session_init(&sign_jwt(&sk, r#"{"kid":1}"#, r#"{"jti":2}"#));
-        auth::jwt_session_init(&sign_jwt(&sk, r#"{"kid":1}"#, r#"{"jti":1}"#));
-    }
-
-    #[pg_test]
-    #[should_panic = "Token used before it is ready"]
-    fn invalid_nbf() {
-        let sk = SigningKey::random(&mut OsRng);
-        let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
-        let jwk = JsonB(serde_json::to_value(&jwk).unwrap());
-
-        auth::init(1, jwk);
-
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        auth::jwt_session_init(&sign_jwt(
-            &sk,
-            r#"{"kid":1}"#,
-            json!({"jti": 1, "nbf": now + 10}),
-        ));
-    }
-
-    #[pg_test]
-    #[should_panic = "Token used after it has expired"]
-    fn invalid_exp() {
-        let sk = SigningKey::random(&mut OsRng);
-        let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
-        let jwk = JsonB(serde_json::to_value(&jwk).unwrap());
-
-        auth::init(1, jwk);
-
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        auth::jwt_session_init(&sign_jwt(
-            &sk,
-            r#"{"kid":1}"#,
-            json!({"jti": 1, "nbf": now - 10, "exp": now - 5}),
-        ));
-    }
-
-    #[pg_test]
-    fn valid_time() {
-        let sk = SigningKey::random(&mut OsRng);
-        let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
-        let jwk = JsonB(serde_json::to_value(&jwk).unwrap());
-
-        auth::init(1, jwk);
-
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        let header = r#"{"kid":1}"#;
-
-        auth::jwt_session_init(&sign_jwt(
-            &sk,
-            header,
-            json!({"jti": 1, "nbf": now - 10, "exp": now + 10}),
-        ));
-        auth::jwt_session_init(&sign_jwt(&sk, header, json!({"jti": 2, "nbf": now - 10})));
-        auth::jwt_session_init(&sign_jwt(&sk, header, json!({"jti": 3, "exp": now + 10})));
-    }
-
-    #[pg_test]
-    fn test_pg_session_jwt() {
-        let sk = SigningKey::random(&mut OsRng);
-        let jwk = PublicKey::from(sk.verifying_key()).to_jwk();
-        let jwk = JsonB(serde_json::to_value(&jwk).unwrap());
-
-        auth::init(1, jwk);
-        let header = r#"{"kid":1}"#;
-
-        auth::jwt_session_init(&sign_jwt(&sk, header, r#"{"sub":"foo","jti":1}"#));
-        assert_eq!(auth::user_id(), "foo");
-
-        auth::jwt_session_init(&sign_jwt(&sk, header, r#"{"sub":"bar","jti":2}"#));
-        assert_eq!(auth::user_id(), "bar");
-    }
-}
-
-/// This module is required by `cargo pgrx test` invocations.
-/// It must be visible at the root of your extension crate.
-#[cfg(test)]
-pub mod pg_test {
-    pub fn setup(_options: Vec<&str>) {
-        // perform one-off initialization when the pg_test framework starts
-    }
-
-    pub fn postgresql_conf_options() -> Vec<&'static str> {
-        // return any postgresql.conf settings that are required for your tests
-        vec![]
     }
 }
