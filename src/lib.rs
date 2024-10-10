@@ -231,14 +231,21 @@ pub mod auth {
     /// This function will panic if the JWT could not be verified.
     #[pg_extern]
     pub fn jwt_session_init(jwt: &str) {
-        Spi::run(format!("SET {} = '{}'", NEON_AUTH_JWT_RUNTIME_PARAM, jwt).as_str())
-            .unwrap_or_else(|e| {
-                error_code!(
-                    PgSqlErrorCode::ERRCODE_S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED,
-                    format!("Couldn't set {}", NEON_AUTH_JWT_RUNTIME_PARAM),
-                    e.to_string(),
-                )
-            });
+        Spi::run(
+            format!(
+                "SET {} = {}",
+                NEON_AUTH_JWT_RUNTIME_PARAM,
+                spi::quote_literal(jwt)
+            )
+            .as_str(),
+        )
+        .unwrap_or_else(|e| {
+            error_code!(
+                PgSqlErrorCode::ERRCODE_S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED,
+                format!("Couldn't set {}", NEON_AUTH_JWT_RUNTIME_PARAM),
+                e.to_string(),
+            )
+        });
         set_jwt_cache()
     }
 
@@ -297,7 +304,7 @@ pub mod auth {
 
     /// Extract a value from the shared state.
     #[pg_extern]
-    pub fn session(s: &str) -> JsonB {
+    pub fn session() -> JsonB {
         JWK.with(|j| {
             if j.get().is_none() {
                 // assuming that running as bgworker
@@ -309,16 +316,16 @@ pub mod auth {
         JWT.with_borrow(|j| {
             JsonB(
                 j.as_ref()
-                    .and_then(|j| j.get(s).cloned())
-                    .unwrap_or(serde_json::Value::Null),
+                    .cloned()
+                    .map_or(serde_json::Value::Null, serde_json::Value::Object),
             )
         })
     }
 
     #[pg_extern]
-    pub fn user_id() -> String {
-        match session("sub").0 {
-            serde_json::Value::String(s) => s,
+    pub fn user_id() -> Option<String> {
+        match session().0.get("sub")? {
+            serde_json::Value::String(s) => Some(s.clone()),
             _ => error_code!(
                 PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
                 "invalid subject claim in the JWT"

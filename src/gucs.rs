@@ -14,8 +14,8 @@ pub fn init() {
         "JSON Web Key (JWK) used for JWT validation",
         "Generated per connection by Neon local proxy",
         &NEON_AUTH_JWK,
-        GucContext::Backend, // we should use GucContext::Backend but this breaks unit tests
-        GucFlags::NOT_WHILE_SEC_REST,
+        GucContext::Backend,
+        GucFlags::NOT_WHILE_SEC_REST | GucFlags::NO_RESET_ALL,
     );
 
     GucRegistry::define_string_guc(
