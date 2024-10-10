@@ -28,7 +28,7 @@ use std::time::Duration;
 use sysinfo::{Pid, ProcessExt, System, SystemExt};
 
 mod shutdown;
-pub use shutdown::add_shutdown_hook;
+use shutdown::add_shutdown_hook;
 
 type LogLines = Arc<Mutex<HashMap<String, Vec<String>>>>;
 
@@ -117,7 +117,7 @@ pub fn run_test(
     options: Option<&str>,
     expected_error: Option<&str>,
     postgresql_conf: Vec<&'static str>,
-    queries: impl for<'a> FnOnce(&'a mut postgres::Transaction) -> Result<(), postgres::Error>,
+    queries: impl for<'a> FnOnce(&'a mut postgres::Client) -> Result<(), postgres::Error>,
 ) -> eyre::Result<()> {
     if std::env::var_os("PGRX_TEST_SKIP").unwrap_or_default() != "" {
         eprintln!("Skipping test because `PGRX_TEST_SKIP` is set in the environment",);
@@ -127,36 +127,28 @@ pub fn run_test(
 
     {
         let (mut client, _) = client(None, &get_pg_user())?;
-        client
-            .execute("ALTER ROLE pgrx WITH NOSUPERUSER LOGIN", &[])
+
+        let resp = client
+            .query_opt("SELECT rolname FROM pg_roles WHERE rolname = 'pgrx'", &[])
             .unwrap();
+
+        if resp.is_none() {
+            client
+                .execute("CREATE ROLE pgrx WITH NOSUPERUSER LOGIN", &[])
+                .unwrap();
+        } else {
+            client
+                .execute("ALTER ROLE pgrx WITH NOSUPERUSER LOGIN", &[])
+                .unwrap();
+        }
+
         client
             .execute("GRANT USAGE ON SCHEMA auth TO pgrx", &[])
             .unwrap();
     }
 
     let (mut client, session_id) = client(options, "pgrx")?;
-
-    let result = client.transaction().map(|mut tx| {
-        let result = queries(&mut tx);
-
-        // let schema = "tests"; // get_extension_schema();
-        // let result = tx.simple_query(&format!("SELECT \"{schema}\".\"{sql_funcname}\"();"));
-
-        if result.is_ok() {
-            // and abort the transaction when complete
-            tx.rollback()?;
-        }
-
-        result
-    });
-
-    // flatten the above result
-    let result = match result {
-        Err(e) => Err(e),
-        Ok(Err(e)) => Err(e),
-        Ok(_) => Ok(()),
-    };
+    let result = queries(&mut client);
 
     if let Err(e) = result {
         let error_as_string = format!("{e}");
@@ -273,7 +265,7 @@ fn get_pg_config() -> eyre::Result<PgConfig> {
     Ok(pg_config)
 }
 
-pub fn client(options: Option<&str>, user: &str) -> eyre::Result<(postgres::Client, String)> {
+fn client(options: Option<&str>, user: &str) -> eyre::Result<(postgres::Client, String)> {
     let pg_config = get_pg_config()?;
 
     let mut config = postgres::Config::new();
@@ -790,11 +782,7 @@ pub(crate) fn get_pg_user() -> String {
         .unwrap_or_else(|_| panic!("USER environment var is unset or invalid UTF-8"))
 }
 
-pub fn get_named_capture(
-    regex: &regex::Regex,
-    name: &'static str,
-    against: &str,
-) -> Option<String> {
+fn get_named_capture(regex: &regex::Regex, name: &'static str, against: &str) -> Option<String> {
     match regex.captures(against) {
         Some(cap) => Some(cap[name].to_string()),
         None => None,
