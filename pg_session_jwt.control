@@ -2,4 +2,4 @@ comment = 'pg_session_jwt: manage authentication sessions using JWTs'
 default_version = '@CARGO_VERSION@'
 module_pathname = '$libdir/pg_session_jwt'
 relocatable = false
-superuser = true
+superuser = false
