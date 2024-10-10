@@ -23,7 +23,10 @@ where
     SHUTDOWN_HOOKS
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .push(ShutdownHook { source: Location::caller(), callback: Box::new(func) });
+        .push(ShutdownHook {
+            source: Location::caller(),
+            callback: Box::new(func),
+        });
 }
 
 pub(super) fn register_shutdown_hook() {
@@ -51,7 +54,9 @@ pub(super) fn register_shutdown_hook() {
 extern "C" fn run_shutdown_hooks() {
     let guard = PanicGuard;
     let mut any_panicked = false;
-    let mut hooks = SHUTDOWN_HOOKS.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut hooks = SHUTDOWN_HOOKS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
     // Note: run hooks in the opposite order they were registered.
     for hook in mem::take(&mut *hooks).into_iter().rev() {
         any_panicked |= hook.run().is_err();
