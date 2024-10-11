@@ -1,6 +1,9 @@
+[workspace]
+members = ["pgrx-tests"]
+
 [package]
 name = "pg_session_jwt"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 
 [lib]
@@ -11,7 +14,7 @@ default = ["pg16"]
 pg14 = ["pgrx/pg14", "pgrx-tests/pg14" ]
 pg15 = ["pgrx/pg15", "pgrx-tests/pg15" ]
 pg16 = ["pgrx/pg16", "pgrx-tests/pg16" ]
-pg_test = ["dep:rand", "base64ct/alloc"]
+pg_test = []
 
 [dependencies]
 base64ct = { version = "1.6.0", features = ["std"] }
@@ -22,10 +25,11 @@ pgrx = "=0.11.3"
 serde = { version = "1.0.203", features = ["derive"], default-features = false }
 serde_json = { version = "1.0.117", default-features = false }
 
-rand = { version = "0.8", optional = true }
-
 [dev-dependencies]
-pgrx-tests = "=0.11.3"
+eyre = "0.6.12"
+libtest-mimic = "0.8.1"
+pgrx-tests = { path = "./pgrx-tests" }
+postgres = "0.19.9"
 rand = "0.8"
 
 [profile.dev]
@@ -36,3 +40,8 @@ panic = "unwind"
 opt-level = 3
 lto = "fat"
 codegen-units = 1
+
+[[test]]
+name = "tests"
+harness = false
+path = "tests/pg_session_jwt.rs"
