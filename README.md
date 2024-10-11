@@ -22,19 +22,19 @@ Features
 Usage
 -----
 
-Before calling functions make sure that `neon.auth.jwk` parameter is properly initialized. [libpq connect options](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNECT-OPTIONS) can be used for that.
+Before calling functions make sure that `pg_session_jwt.jwk` parameter is properly initialized. [libpq connect options](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNECT-OPTIONS) can be used for that.
 
 For example:
 ```console
 MY_JWK=...
-export PGOPTIONS="-c neon.auth.jwk=$MY_JWK"
+export PGOPTIONS="-c pg_session_jwt.jwk=$MY_JWK"
 ```
 
 `pg_session_jwt` exposes four main functions:
 
 ### 1\. auth.init() → void
 
-Initializes a session using JWK stored in `neon.auth.jwk` [run-time parameter](https://www.postgresql.org/docs/current/sql-show.html). Please remember that this parameter is fixed for a given connection once it's started (but it can vary across different connections)
+Initializes a session using JWK stored in `pg_session_jwt.jwk` [run-time parameter](https://www.postgresql.org/docs/current/sql-show.html). Please remember that this parameter is fixed for a given connection once it's started (but it can vary across different connections)
 
 ### 2\. auth.jwt\_session\_init(jwt text) → void
 

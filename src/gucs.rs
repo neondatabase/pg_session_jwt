@@ -1,10 +1,10 @@
 use pgrx::*;
 use std::ffi::CStr;
 
-pub static NEON_AUTH_JWK_RUNTIME_PARAM: &str = "neon.auth.jwk";
+pub static NEON_AUTH_JWK_RUNTIME_PARAM: &str = "pg_session_jwt.jwk";
 pub static NEON_AUTH_JWK: GucSetting<Option<&'static CStr>> =
     GucSetting::<Option<&'static CStr>>::new(None);
-pub static NEON_AUTH_JWT_RUNTIME_PARAM: &str = "neon.auth.jwt";
+pub static NEON_AUTH_JWT_RUNTIME_PARAM: &str = "pg_session_jwt.jwt";
 pub static NEON_AUTH_JWT: GucSetting<Option<&'static CStr>> =
     GucSetting::<Option<&'static CStr>>::new(None);
 

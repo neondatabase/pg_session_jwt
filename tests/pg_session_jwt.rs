@@ -144,7 +144,7 @@ fn test_bgworker(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postg
     let header = r#"{"kid":1}"#;
     let jwt = sign_jwt(sk, header, r#"{"sub":"foo","jti":1}"#);
 
-    tx.execute(&format!("set neon.auth.jwt = '{jwt}'"), &[])?;
+    tx.execute(&format!("set pg_session_jwt.jwt = '{jwt}'"), &[])?;
     let user_id = tx.query_one("select auth.user_id()", &[])?;
     let user_id = user_id.get::<_, String>("user_id");
     assert_eq!(user_id, "foo");
@@ -168,7 +168,7 @@ fn test_bgworker(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postg
 //         let user_id = user_id.get::<_, Option<String>>("user_id");
 //         assert_eq!(user_id.as_deref(), Some("foo"));
 
-//         tx.simple_query("reset neon.auth.jwt")?;
+//         tx.simple_query("reset pg_session_jwt.jwt")?;
 
 //         let user_id = tx.query_one("select auth.user_id()", &[])?;
 //         let user_id = user_id.get::<_, Option<String>>("user_id");
@@ -183,7 +183,7 @@ fn test_bgworker(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postg
 //     })
 // }
 
-static NEON_AUTH_JWK_RUNTIME_PARAM: &str = "neon.auth.jwk";
+static NEON_AUTH_JWK_RUNTIME_PARAM: &str = "pg_session_jwt.jwk";
 
 fn sign_jwt(sk: &SigningKey, header: &str, payload: impl ToString) -> String {
     let header = Base64UrlUnpadded::encode_string(header.as_bytes());
