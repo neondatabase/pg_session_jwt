@@ -1,6 +1,5 @@
 mod gucs;
 
-use p256::elliptic_curve::JwkEcKey;
 use pgrx::prelude::*;
 
 pgrx::pg_module_magic!();
@@ -22,21 +21,6 @@ pub unsafe extern "C" fn _PG_init() {
     gucs::init();
 }
 
-/// An Elliptic Curve JSON Web Key.
-///
-/// This type is defined in [RFC7517 Section 4].
-///
-/// [RFC7517 Section 4]: https://datatracker.ietf.org/doc/html/rfc7517#section-4
-#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
-struct JwkEc {
-    /// The key material.
-    #[serde(flatten)]
-    key: JwkEcKey,
-
-    // The key parameters.
-    kid: i64,
-}
-
 #[pg_schema]
 pub mod auth {
     use std::cell::{OnceCell, RefCell};
@@ -45,6 +29,7 @@ pub mod auth {
     use p256::ecdsa::signature::Verifier;
     use p256::ecdsa::{Signature, VerifyingKey};
     use p256::elliptic_curve::generic_array::GenericArray;
+    use p256::elliptic_curve::JwkEcKey;
     use p256::PublicKey;
     use pgrx::prelude::*;
     use pgrx::JsonB;
@@ -53,20 +38,13 @@ pub mod auth {
     use crate::gucs::{
         NEON_AUTH_JWK, NEON_AUTH_JWK_RUNTIME_PARAM, NEON_AUTH_JWT, NEON_AUTH_JWT_RUNTIME_PARAM,
     };
-    use crate::JwkEc;
 
     type Object = serde_json::Map<String, serde_json::Value>;
 
     thread_local! {
-        static JWK: OnceCell<Key> = const { OnceCell::new() };
+        static JWK: OnceCell<VerifyingKey> = const { OnceCell::new() };
         static JWT: RefCell<Option<Object>> = const { RefCell::new(None) };
         static JTI: RefCell<i64> = const { RefCell::new(0) };
-    }
-
-    #[derive(Clone)]
-    struct Key {
-        kid: i64,
-        key: VerifyingKey,
     }
 
     /// Set the public key and key ID for this postgres session.
@@ -94,14 +72,14 @@ pub mod auth {
                 )
             });
 
-        let jwk: JwkEc = serde_json::from_str(jwk).unwrap_or_else(|e| {
+        let jwk: JwkEcKey = serde_json::from_str(jwk).unwrap_or_else(|e| {
             error_code!(
                 PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
                 "session init requires an ES256 JWK",
                 e.to_string(),
             )
         });
-        let key = PublicKey::from_jwk(&jwk.key).unwrap_or_else(|p256::elliptic_curve::Error| {
+        let key = PublicKey::from_jwk(&jwk).unwrap_or_else(|p256::elliptic_curve::Error| {
             error_code!(
                 PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
                 "session init requires an ES256 JWK",
@@ -109,7 +87,7 @@ pub mod auth {
         });
         let key = VerifyingKey::from(key);
         JWK.with(|j| {
-            if j.set(Key { kid: jwk.kid, key }).is_err() {
+            if j.set(key).is_err() {
                 error_code!(
                     PgSqlErrorCode::ERRCODE_UNIQUE_VIOLATION,
                     "JWK state can only be set once per session.",
@@ -118,7 +96,7 @@ pub mod auth {
         })
     }
 
-    fn verify_signature(key: &Key, body: &str, sig: &str) {
+    fn verify_signature(key: &VerifyingKey, body: &str, sig: &str) {
         let mut sig_bytes = GenericArray::default();
         Base64UrlUnpadded::decode(sig, &mut sig_bytes).unwrap_or_else(|_| {
             error_code!(
@@ -133,28 +111,12 @@ pub mod auth {
             )
         });
 
-        key.key.verify(body.as_bytes(), &sig).unwrap_or_else(|_| {
+        key.verify(body.as_bytes(), &sig).unwrap_or_else(|_| {
             error_code!(
                 PgSqlErrorCode::ERRCODE_CHECK_VIOLATION,
                 "invalid JWT signature",
             )
         });
-    }
-
-    fn verify_key_id(key: &Key, header: &Object) {
-        let kid = header
-            .get("kid")
-            .and_then(|x| x.as_i64())
-            .unwrap_or_else(|| {
-                error_code!(
-                    PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
-                    "JWT header must contain a valid 'kid' (key ID)",
-                )
-            });
-
-        if key.kid != kid {
-            error_code!(PgSqlErrorCode::ERRCODE_CHECK_VIOLATION, "Key ID mismatch");
-        }
     }
 
     fn verify_token_id(payload: &Object) -> i64 {
@@ -282,15 +244,13 @@ pub mod auth {
                 "invalid JWT encoding",
             )
         });
-        let (header, payload) = body.split_once('.').unwrap_or_else(|| {
+        let (_, payload) = body.split_once('.').unwrap_or_else(|| {
             error_code!(
                 PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
                 "invalid JWT encoding",
             )
         });
-        let header: Object = json_base64_decode(header);
 
-        verify_key_id(&key, &header);
         verify_signature(&key, body, sig);
 
         let payload: Object = json_base64_decode(payload);

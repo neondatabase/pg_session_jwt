@@ -10,7 +10,6 @@ use p256::{
     NistP256,
 };
 use rand::rngs::OsRng;
-use serde::Serialize;
 use serde_json::json;
 
 fn main() -> ExitCode {
@@ -45,7 +44,7 @@ where
         + 'static,
 {
     let sk = SigningKey::random(&mut OsRng);
-    let jwk = create_jwk(&sk, 1);
+    let jwk = create_jwk(&sk);
     let options = format!("-c {NEON_AUTH_JWK_RUNTIME_PARAM}={jwk}");
 
     Trial::test(name, move || {
@@ -186,16 +185,6 @@ fn test_bgworker(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postg
 
 static NEON_AUTH_JWK_RUNTIME_PARAM: &str = "neon.auth.jwk";
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-struct JwkEc {
-    /// The key material.
-    #[serde(flatten)]
-    key: JwkEcKey,
-
-    // The key parameters.
-    kid: i64,
-}
-
 fn sign_jwt(sk: &SigningKey, header: &str, payload: impl ToString) -> String {
     let header = Base64UrlUnpadded::encode_string(header.as_bytes());
     let payload = Base64UrlUnpadded::encode_string(payload.to_string().as_bytes());
@@ -206,9 +195,8 @@ fn sign_jwt(sk: &SigningKey, header: &str, payload: impl ToString) -> String {
     format!("{message}.{base64_sig}")
 }
 
-fn create_jwk(sk: &SigningKey, kid: i64) -> String {
+fn create_jwk(sk: &SigningKey) -> String {
     let point = sk.verifying_key().to_encoded_point(false);
     let key = JwkEcKey::from_encoded_point::<NistP256>(&point).unwrap();
-    let jwk = JwkEc { key, kid };
-    serde_json::to_string(&jwk).unwrap()
+    serde_json::to_string(&key).unwrap()
 }
