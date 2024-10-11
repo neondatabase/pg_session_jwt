@@ -229,14 +229,12 @@ pub mod auth {
                 )
             });
         let key = JWK.with(|b| {
-            b.get()
-                .unwrap_or_else(|| {
-                    error_code!(
-                        PgSqlErrorCode::ERRCODE_NOT_NULL_VIOLATION,
-                        "JWK state has not been initialised",
-                    )
-                })
-                .clone()
+            *b.get().unwrap_or_else(|| {
+                error_code!(
+                    PgSqlErrorCode::ERRCODE_NOT_NULL_VIOLATION,
+                    "JWK state has not been initialised",
+                )
+            })
         });
         let (body, sig) = jwt.rsplit_once('.').unwrap_or_else(|| {
             error_code!(

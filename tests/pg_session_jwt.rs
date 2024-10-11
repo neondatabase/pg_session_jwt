@@ -49,13 +49,13 @@ where
 
     Trial::test(name, move || {
         pgrx_tests::run_test(Some(&options), error, vec![], move |tx| f(&sk, tx))
-            .map_err(|e| libtest_mimic::Failed::from(e))
+            .map_err(libtest_mimic::Failed::from)
     })
 }
 
 fn wrong_txid(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postgres::Error> {
-    let jwt1 = sign_jwt(&sk, r#"{"kid":1}"#, r#"{"jti":1}"#);
-    let jwt2 = sign_jwt(&sk, r#"{"kid":1}"#, r#"{"jti":2}"#);
+    let jwt1 = sign_jwt(sk, r#"{"kid":1}"#, r#"{"jti":1}"#);
+    let jwt2 = sign_jwt(sk, r#"{"kid":1}"#, r#"{"jti":2}"#);
 
     tx.execute("select auth.init()", &[])?;
     tx.execute("select auth.jwt_session_init($1)", &[&jwt2])?;
@@ -70,7 +70,7 @@ fn invalid_nbf(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postgre
         .unwrap()
         .as_secs();
 
-    let jwt = sign_jwt(&sk, r#"{"kid":1}"#, json!({"jti": 1, "nbf": now + 10}));
+    let jwt = sign_jwt(sk, r#"{"kid":1}"#, json!({"jti": 1, "nbf": now + 10}));
 
     tx.execute("select auth.init()", &[])?;
     tx.execute("select auth.jwt_session_init($1)", &[&jwt])?;
@@ -85,7 +85,7 @@ fn invalid_exp(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postgre
         .as_secs();
 
     let jwt = sign_jwt(
-        &sk,
+        sk,
         r#"{"kid":1}"#,
         json!({"jti": 1,  "nbf": now - 10, "exp": now - 5}),
     );
@@ -104,12 +104,12 @@ fn valid_time(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postgres
 
     let header = r#"{"kid":1}"#;
     let jwt1 = sign_jwt(
-        &sk,
+        sk,
         header,
         json!({"jti": 1, "nbf": now - 10, "exp": now + 10}),
     );
-    let jwt2 = sign_jwt(&sk, header, json!({"jti": 2, "nbf": now - 10}));
-    let jwt3 = sign_jwt(&sk, header, json!({"jti": 3, "exp": now + 10}));
+    let jwt2 = sign_jwt(sk, header, json!({"jti": 2, "nbf": now - 10}));
+    let jwt3 = sign_jwt(sk, header, json!({"jti": 3, "exp": now + 10}));
 
     tx.execute("select auth.init()", &[])?;
     tx.execute("select auth.jwt_session_init($1)", &[&jwt1])?;
@@ -121,8 +121,8 @@ fn valid_time(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postgres
 
 fn test_pg_session_jwt(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postgres::Error> {
     let header = r#"{"kid":1}"#;
-    let jwt1 = sign_jwt(&sk, header, r#"{"sub":"foo","jti":1}"#);
-    let jwt2 = sign_jwt(&sk, header, r#"{"sub":"bar","jti":2}"#);
+    let jwt1 = sign_jwt(sk, header, r#"{"sub":"foo","jti":1}"#);
+    let jwt2 = sign_jwt(sk, header, r#"{"sub":"bar","jti":2}"#);
 
     tx.execute("select auth.init()", &[])?;
     tx.execute("select auth.jwt_session_init($1)", &[&jwt1])?;
@@ -142,7 +142,7 @@ fn test_pg_session_jwt(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(),
 // than one JWT
 fn test_bgworker(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postgres::Error> {
     let header = r#"{"kid":1}"#;
-    let jwt = sign_jwt(&sk, header, r#"{"sub":"foo","jti":1}"#);
+    let jwt = sign_jwt(sk, header, r#"{"sub":"foo","jti":1}"#);
 
     tx.execute(&format!("set neon.auth.jwt = '{jwt}'"), &[])?;
     let user_id = tx.query_one("select auth.user_id()", &[])?;
