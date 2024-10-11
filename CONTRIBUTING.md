@@ -15,8 +15,15 @@ Let's initialize pgrx.
 cargo pgrx init
 ```
 
-It's time to run `pg_session_jwt` locally with
+## How to run the extension locally
+
+It's time to run `pg_session_jwt` locally. Please note that `neon.auth.jwk`
+parameter MUST be set when new connection is created (for more details please
+refer to the README file).
 ```console
+MY_JWK=...
+export PGOPTIONS="-c neon.auth.jwk=$MY_JWK"
+
 cargo pgrx run pg16
 ```
 
@@ -34,4 +41,17 @@ If you introduce new function make sure to reload the extension with
 ```sql
 DROP EXTENSION pg_session_jwt;
 CREATE EXTENSION pg_session_jwt;
+```
+
+## Before sending a PR
+
+You can lint your code with
+```console
+rustfmt src/*.rs tests/*.rs
+cargo clippy --fix --allow-staged
+```
+
+You can run test-suite
+```console
+cargo test
 ```
