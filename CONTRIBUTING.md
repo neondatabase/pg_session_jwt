@@ -17,12 +17,12 @@ cargo pgrx init
 
 ## How to run the extension locally
 
-It's time to run `pg_session_jwt` locally. Please note that `neon.auth.jwk`
+It's time to run `pg_session_jwt` locally. Please note that `pg_session_jwt.jwk`
 parameter MUST be set when new connection is created (for more details please
 refer to the README file).
 ```console
 MY_JWK=...
-export PGOPTIONS="-c neon.auth.jwk=$MY_JWK"
+export PGOPTIONS="-c pg_session_jwt.jwk=$MY_JWK"
 
 cargo pgrx run pg16
 ```
