@@ -261,7 +261,7 @@ pub mod auth {
     }
 
     /// Extract a value from the shared state.
-    #[pg_extern]
+    #[pg_extern(parallel_safe, stable)]
     pub fn session() -> JsonB {
         JWK.with(|j| {
             if j.get().is_none() {
@@ -280,7 +280,7 @@ pub mod auth {
         })
     }
 
-    #[pg_extern]
+    #[pg_extern(parallel_safe, stable)]
     pub fn user_id() -> Option<String> {
         match session().0.get("sub")? {
             serde_json::Value::String(s) => Some(s.clone()),
