@@ -40,9 +40,9 @@ Initializes a session using JWK stored in `pg_session_jwt.jwk` [run-time paramet
 
 Initializes the JWT session with the provided `jwt` as a string. JWT must be signed by the JWK that was initialized with `auth.init()`
 
-### 3\. auth.session(s text) → jsonb
+### 3\. auth.session() → jsonb
 
-Retrieves JWT session data as a JSONB object based on the session token.
+Retrieves JWT session data.
 
 ### 4\. auth.user\_id() → text
 
