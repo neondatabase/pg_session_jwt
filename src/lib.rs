@@ -43,18 +43,11 @@ pub mod auth {
 
     thread_local! {
         static JWK: OnceCell<VerifyingKey> = const { OnceCell::new() };
-        static JWT: RefCell<Option<Object>> = const { RefCell::new(None) };
+        static JWT: RefCell<Option<(String, Object)>> = const { RefCell::new(None) };
         static JTI: RefCell<i64> = const { RefCell::new(0) };
     }
 
-    /// Set the public key and key ID for this postgres session.
-    ///
-    /// # Panics
-    ///
-    /// This function will panic if called multiple times per session.
-    /// This is to prevent replacing the key mid-session.
-    #[pg_extern]
-    pub fn init() {
+    fn get_jwk_guc() -> VerifyingKey {
         let jwk = NEON_AUTH_JWK
             .get()
             .unwrap_or_else(|| {
@@ -63,37 +56,33 @@ pub mod auth {
                     format!("Missing runtime parameter: {}", NEON_AUTH_JWK_RUNTIME_PARAM)
                 )
             })
-            .to_str()
-            .unwrap_or_else(|e| {
-                error_code!(
-                    PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
-                    format!("Couldn't parse {}", NEON_AUTH_JWK_RUNTIME_PARAM),
-                    e.to_string(),
-                )
-            });
+            .to_bytes();
 
-        let jwk: JwkEcKey = serde_json::from_str(jwk).unwrap_or_else(|e| {
-            error_code!(
-                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
-                "session init requires an ES256 JWK",
-                e.to_string(),
-            )
-        });
-        let key = PublicKey::from_jwk(&jwk).unwrap_or_else(|p256::elliptic_curve::Error| {
-            error_code!(
-                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
-                "session init requires an ES256 JWK",
-            )
-        });
-        let key = VerifyingKey::from(key);
-        JWK.with(|j| {
-            if j.set(key).is_err() {
-                error_code!(
-                    PgSqlErrorCode::ERRCODE_UNIQUE_VIOLATION,
-                    "JWK state can only be set once per session.",
-                )
-            }
+        JWK.with(|b| {
+            *b.get_or_init(|| {
+                let jwk: JwkEcKey = serde_json::from_slice(jwk).unwrap_or_else(|e| {
+                    error_code!(
+                        PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                        "pg_session_jwt.jwk requires an ES256 JWK",
+                        e.to_string(),
+                    )
+                });
+                let key =
+                    PublicKey::from_jwk(&jwk).unwrap_or_else(|p256::elliptic_curve::Error| {
+                        error_code!(
+                            PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                            "pg_session_jwt.jwk requires an ES256 JWK",
+                        )
+                    });
+                VerifyingKey::from(key)
+            })
         })
+    }
+
+    /// Set the public key for this postgres session.
+    #[pg_extern]
+    pub fn init() {
+        get_jwk_guc();
     }
 
     fn verify_signature(key: &VerifyingKey, body: &str, sig: &str) {
@@ -208,81 +197,64 @@ pub mod auth {
                 e.to_string(),
             )
         });
-        set_jwt_cache()
+        validate_jwt();
     }
 
-    fn set_jwt_cache() {
-        let jwt = NEON_AUTH_JWT
-            .get()
-            .unwrap_or_else(|| {
-                error_code!(
-                    PgSqlErrorCode::ERRCODE_NO_DATA,
-                    format!("Missing runtime parameter: {}", NEON_AUTH_JWT_RUNTIME_PARAM)
-                )
-            })
-            .to_str()
-            .unwrap_or_else(|e| {
-                error_code!(
-                    PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
-                    format!("Couldn't parse {}", NEON_AUTH_JWT_RUNTIME_PARAM),
-                    e.to_string(),
-                )
-            });
-        let key = JWK.with(|b| {
-            *b.get().unwrap_or_else(|| {
-                error_code!(
-                    PgSqlErrorCode::ERRCODE_NOT_NULL_VIOLATION,
-                    "JWK state has not been initialised",
-                )
-            })
-        });
-        let (body, sig) = jwt.rsplit_once('.').unwrap_or_else(|| {
+    fn get_jwt_guc() -> Option<&'static str> {
+        Some(NEON_AUTH_JWT.get()?.to_str().unwrap_or_else(|e| {
             error_code!(
                 PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
-                "invalid JWT encoding",
+                format!("invalid JWT parameter {}", NEON_AUTH_JWT_RUNTIME_PARAM),
+                e.to_string(),
             )
-        });
-        let (_, payload) = body.split_once('.').unwrap_or_else(|| {
-            error_code!(
-                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
-                "invalid JWT encoding",
-            )
-        });
+        }))
+    }
 
-        verify_signature(&key, body, sig);
+    fn validate_jwt() -> Option<serde_json::Map<String, serde_json::Value>> {
+        let jwt = get_jwt_guc()?;
+        let key = get_jwk_guc();
 
-        let payload: Object = json_base64_decode(payload);
-        let jti = verify_token_id(&payload);
-        verify_time(&payload);
+        JWT.with_borrow_mut(|cached_jwt| {
+            match cached_jwt {
+                Some((cached_jwt, payload)) if cached_jwt == jwt => Some(payload.clone()),
+                _ => {
+                    let (body, sig) = jwt.rsplit_once('.').unwrap_or_else(|| {
+                        error_code!(
+                            PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                            "invalid JWT encoding",
+                        )
+                    });
+                    let (_, payload) = body.split_once('.').unwrap_or_else(|| {
+                        error_code!(
+                            PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                            "invalid JWT encoding",
+                        )
+                    });
 
-        // update state
-        JTI.replace(jti);
-        JWT.set(Some(payload));
+                    verify_signature(&key, body, sig);
+
+                    let payload: Object = json_base64_decode(payload);
+                    let jti = verify_token_id(&payload);
+                    verify_time(&payload);
+
+                    // update state
+                    JTI.replace(jti);
+                    *cached_jwt = Some((jwt.to_string(), payload.clone()));
+                    Some(payload)
+                }
+            }
+        })
     }
 
     /// Extract a value from the shared state.
     #[pg_extern(parallel_safe, stable)]
     pub fn session() -> JsonB {
-        JWK.with(|j| {
-            if j.get().is_none() {
-                // assuming that running as bgworker
-                init();
-                set_jwt_cache();
-            }
-        });
-
-        JWT.with_borrow(|j| {
-            JsonB(
-                j.as_ref()
-                    .cloned()
-                    .map_or(serde_json::Value::Null, serde_json::Value::Object),
-            )
-        })
+        JsonB(validate_jwt().map_or(serde_json::Value::Null, serde_json::Value::Object))
     }
 
     #[pg_extern(parallel_safe, stable)]
     pub fn user_id() -> Option<String> {
-        match session().0.get("sub")? {
+        match validate_jwt()?.get("sub")? {
             serde_json::Value::String(s) => Some(s.clone()),
             _ => error_code!(
                 PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
