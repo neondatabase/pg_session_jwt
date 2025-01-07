@@ -24,8 +24,8 @@ pg_test = []
 [dependencies]
 base64ct = { version = "1.6.0", features = ["std"] }
 heapless = { version = "0.8.0", features = ["serde"] }
-jose-jwk = { version = "0.1.2", default-features = false, features = ["p256"] }
-p256 = { version = "0.13.2", default-features = false, features = ["sha2", "sha256", "ecdsa", "digest", "serde", "jwk"] }
+jose-jwk = { version = "0.1.2", default-features = false }
+ed25519-dalek = { version = "2", default-features = false }
 pgrx = "0.12.6"
 serde = { version = "1.0.203", features = ["derive"], default-features = false }
 serde_json = { version = "1.0.117", default-features = false }
@@ -36,6 +36,7 @@ libtest-mimic = "0.8.1"
 pgrx-tests = { path = "./pgrx-tests" }
 postgres = "0.19.9"
 rand = "0.8"
+ed25519-dalek = { version = "2", default-features = false, features = ["rand_core"] }
 
 [profile.dev]
 panic = "unwind"
