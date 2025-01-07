@@ -1038,7 +1038,7 @@ dependencies = [
 
 [[package]]
 name = "pg_session_jwt"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "base64ct",
  "ed25519-dalek",
