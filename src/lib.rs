@@ -240,6 +240,11 @@ pub mod auth {
                     // update state
                     JTI.replace(jti);
                     *cached_jwt = Some((jwt.to_string(), payload.clone()));
+                    log!(
+                        "valid JWT, sub={} aud={}",
+                        payload.get("sub").unwrap_or(&"".into()),
+                        payload.get("aud").unwrap_or(&"".into())
+                    );
                     Some(payload)
                 }
             }
