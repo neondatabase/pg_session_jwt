@@ -7,21 +7,26 @@ version = "0.1.2"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "lib"]
+
+[[bin]]
+name = "pgrx_embed_pg_session_jwt"
+path = "./src/bin/pgrx_embed.rs"
 
 [features]
-default = ["pg16"]
+default = ["pg17"]
 pg14 = ["pgrx/pg14", "pgrx-tests/pg14" ]
 pg15 = ["pgrx/pg15", "pgrx-tests/pg15" ]
 pg16 = ["pgrx/pg16", "pgrx-tests/pg16" ]
+pg17 = ["pgrx/pg17", "pgrx-tests/pg17" ]
 pg_test = []
 
 [dependencies]
 base64ct = { version = "1.6.0", features = ["std"] }
-heapless = { version = "0.7.0", features = ["serde"] }
+heapless = { version = "0.8.0", features = ["serde"] }
 jose-jwk = { version = "0.1.2", default-features = false, features = ["p256"] }
 p256 = { version = "0.13.2", default-features = false, features = ["sha2", "sha256", "ecdsa", "digest", "serde", "jwk"] }
-pgrx = "=0.11.3"
+pgrx = "0.12.6"
 serde = { version = "1.0.203", features = ["derive"], default-features = false }
 serde_json = { version = "1.0.117", default-features = false }
 

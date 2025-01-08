@@ -10,6 +10,7 @@
 //LICENSE
 //LICENSE Use of this source code is governed by the MIT license that can be found in the LICENSE file.
 use std::collections::HashSet;
+use std::env::VarError;
 use std::process::{Command, Stdio};
 
 use eyre::{eyre, WrapErr};
@@ -25,7 +26,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use sysinfo::{Pid, ProcessExt, System, SystemExt};
+use sysinfo::{Pid, System};
 
 mod shutdown;
 use shutdown::add_shutdown_hook;
@@ -237,7 +238,7 @@ fn initialize_test_framework(
         let system_session_id = start_pg(state.loglines.clone())?;
         let pg_config = get_pg_config()?;
         dropdb()?;
-        createdb(&pg_config, get_pg_dbname(), true, false)?;
+        createdb(&pg_config, get_pg_dbname(), true, false, get_runas())?;
         create_extension()?;
         state.installed = true;
         state.system_session_id = system_session_id;
@@ -782,6 +783,22 @@ pub(crate) fn get_pg_user() -> String {
         .unwrap_or_else(|_| panic!("USER environment var is unset or invalid UTF-8"))
 }
 
+#[inline]
+fn get_runas() -> Option<String> {
+    match std::env::var("CARGO_PGRX_TEST_RUNAS") {
+        Ok(s) => Some(s),
+        Err(e) => match e {
+            VarError::NotPresent => None,
+            VarError::NotUnicode(e) => {
+                panic!(
+                    "`CARGO_PGRX_TEST_RUNAS` environment var value is not unicode:  `{}`",
+                    e.to_string_lossy()
+                )
+            }
+        },
+    }
+}
+
 fn get_named_capture(regex: &regex::Regex, name: &'static str, against: &str) -> Option<String> {
     match regex.captures(against) {
         Some(cap) => Some(cap[name].to_string()),
@@ -834,7 +851,7 @@ fn get_cargo_args() -> Vec<String> {
     while let Some(process) = system.process(pid) {
         // only if it's "cargo"... (This works for now, but just because `cargo`
         // is at the end of the path. How *should* this handle `CARGO`?)
-        if process.exe().ends_with("cargo") {
+        if process.exe().is_some_and(|p| p.ends_with("cargo")) {
             // ... and only if it's "cargo test"...
             if process.cmd().iter().any(|arg| arg == "test")
                 && !process.cmd().iter().any(|arg| arg == "pgrx")
