@@ -216,7 +216,10 @@ pub mod auth {
 
         JWT.with_borrow_mut(|cached_jwt| {
             match cached_jwt {
-                Some((cached_jwt, payload)) if cached_jwt == jwt => Some(payload.clone()),
+                Some((cached_jwt, payload)) if cached_jwt == jwt => {
+                    log_audit_validated_jwt(payload);
+                    Some(payload.clone())
+                },
                 _ => {
                     let (body, sig) = jwt.rsplit_once('.').unwrap_or_else(|| {
                         error_code!(
@@ -240,15 +243,19 @@ pub mod auth {
                     // update state
                     JTI.replace(jti);
                     *cached_jwt = Some((jwt.to_string(), payload.clone()));
-                    log!(
-                        "valid JWT, sub={} aud={}",
-                        payload.get("sub").unwrap_or(&"".into()),
-                        payload.get("aud").unwrap_or(&"".into())
-                    );
+                    log_audit_validated_jwt(&payload);
                     Some(payload)
                 }
             }
         })
+    }
+
+    fn log_audit_validated_jwt(payload: &Object) {
+        log!(
+            "Validated JWT: sub={} aud={}",
+            payload.get("sub").unwrap_or(&"".into()),
+            payload.get("aud").unwrap_or(&"".into())
+        );
     }
 
     /// Extract a value from the shared state.
