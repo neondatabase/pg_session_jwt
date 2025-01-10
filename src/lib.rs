@@ -252,7 +252,7 @@ pub mod auth {
 
     fn log_audit_validated_jwt(payload: &Object) {
         log!(
-            "Validated JWT: sub={} aud={}",
+            "JWT issued for sub={} and aud={} was succesfully validated",
             payload.get("sub").unwrap_or(&"".into()),
             payload.get("aud").unwrap_or(&"".into())
         );
