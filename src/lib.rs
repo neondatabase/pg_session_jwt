@@ -25,14 +25,13 @@ pub unsafe extern "C" fn _PG_init() {
 pub mod auth {
     use std::cell::{OnceCell, RefCell};
 
-    use base64ct::{Base64UrlUnpadded, Decoder, Encoding};
-    use p256::ecdsa::signature::Verifier;
-    use p256::ecdsa::{Signature, VerifyingKey};
-    use p256::elliptic_curve::generic_array::GenericArray;
-    use p256::elliptic_curve::JwkEcKey;
-    use p256::PublicKey;
     use pgrx::prelude::*;
     use pgrx::JsonB;
+
+    use ed25519_dalek::{Signature, VerifyingKey};
+    use jose_jwk::jose_b64;
+
+    use base64ct::{Base64UrlUnpadded, Decoder, Encoding};
     use serde::de::DeserializeOwned;
 
     use crate::gucs::{
@@ -40,6 +39,34 @@ pub mod auth {
     };
 
     type Object = serde_json::Map<String, serde_json::Value>;
+
+    /// A octet key pair CFRG-curve key, as defined in [RFC 8037]
+    ///
+    /// [RFC 8037]: https://www.rfc-editor.org/rfc/rfc8037
+    #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+    pub struct Ed25519Okp {
+        pub kty: Kty,
+
+        /// The CFRG curve.
+        pub crv: OkpCurves,
+
+        /// The public key.
+        pub x: jose_b64::serde::Bytes<[u8; 32]>,
+    }
+
+    /// The CFRG Curve.
+    #[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+    #[non_exhaustive]
+    pub enum Kty {
+        OKP,
+    }
+
+    /// The CFRG Curve.
+    #[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+    #[non_exhaustive]
+    pub enum OkpCurves {
+        Ed25519,
+    }
 
     thread_local! {
         static JWK: OnceCell<VerifyingKey> = const { OnceCell::new() };
@@ -60,21 +87,21 @@ pub mod auth {
 
         JWK.with(|b| {
             *b.get_or_init(|| {
-                let jwk: JwkEcKey = serde_json::from_slice(jwk).unwrap_or_else(|e| {
+                let jwk: Ed25519Okp = serde_json::from_slice(jwk).unwrap_or_else(|e| {
                     error_code!(
                         PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
                         "pg_session_jwt.jwk requires an ES256 JWK",
                         e.to_string(),
                     )
                 });
-                let key =
-                    PublicKey::from_jwk(&jwk).unwrap_or_else(|p256::elliptic_curve::Error| {
-                        error_code!(
-                            PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
-                            "pg_session_jwt.jwk requires an ES256 JWK",
-                        )
-                    });
-                VerifyingKey::from(key)
+
+                VerifyingKey::from_bytes(&jwk.x).unwrap_or_else(|e| {
+                    error_code!(
+                        PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                        "pg_session_jwt.jwk requires an ES256 JWK",
+                        e.to_string()
+                    )
+                })
             })
         })
     }
@@ -86,26 +113,22 @@ pub mod auth {
     }
 
     fn verify_signature(key: &VerifyingKey, body: &str, sig: &str) {
-        let mut sig_bytes = GenericArray::default();
+        let mut sig_bytes = [0; 64];
         Base64UrlUnpadded::decode(sig, &mut sig_bytes).unwrap_or_else(|_| {
             error_code!(
                 PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
                 "invalid JWT signature encoding",
             )
         });
-        let sig = Signature::from_bytes(&sig_bytes).unwrap_or_else(|_| {
-            error_code!(
-                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
-                "invalid JWT signature encoding",
-            )
-        });
+        let sig = Signature::from_bytes(&sig_bytes);
 
-        key.verify(body.as_bytes(), &sig).unwrap_or_else(|_| {
-            error_code!(
-                PgSqlErrorCode::ERRCODE_CHECK_VIOLATION,
-                "invalid JWT signature",
-            )
-        });
+        key.verify_strict(body.as_bytes(), &sig)
+            .unwrap_or_else(|_| {
+                error_code!(
+                    PgSqlErrorCode::ERRCODE_CHECK_VIOLATION,
+                    "invalid JWT signature",
+                )
+            });
     }
 
     fn verify_token_id(payload: &Object) -> i64 {

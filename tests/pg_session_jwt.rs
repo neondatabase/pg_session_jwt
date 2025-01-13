@@ -2,13 +2,9 @@ use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64ct::{Base64UrlUnpadded, Encoding};
+use ed25519_dalek::{Signature, Signer, SigningKey};
+use jose_jwk::{jose_b64, Okp};
 use libtest_mimic::{run, Trial};
-use p256::ecdsa::signature::Signer;
-use p256::{
-    ecdsa::{Signature, SigningKey},
-    elliptic_curve::JwkEcKey,
-    NistP256,
-};
 use rand::rngs::OsRng;
 use serde_json::json;
 
@@ -43,7 +39,7 @@ where
         + Send
         + 'static,
 {
-    let sk = SigningKey::random(&mut OsRng);
+    let sk = SigningKey::generate(&mut OsRng);
     let jwk = create_jwk(&sk);
     let options = format!("-c {NEON_AUTH_JWK_RUNTIME_PARAM}={jwk}");
 
@@ -196,7 +192,11 @@ fn sign_jwt(sk: &SigningKey, header: &str, payload: impl ToString) -> String {
 }
 
 fn create_jwk(sk: &SigningKey) -> String {
-    let point = sk.verifying_key().to_encoded_point(false);
-    let key = JwkEcKey::from_encoded_point::<NistP256>(&point).unwrap();
+    let key = sk.verifying_key().to_bytes();
+    let key = jose_jwk::Key::Okp(Okp {
+        crv: jose_jwk::OkpCurves::Ed25519,
+        x: jose_b64::serde::Bytes::from(key.to_vec()),
+        d: None,
+    });
     serde_json::to_string(&key).unwrap()
 }
