@@ -1,0 +1,2 @@
+-- no migration necessary. changes some internal details
+-- some logging is introduced and the JWK format has switched to using ed25519 keys.
