@@ -1,8 +1,6 @@
 -- Error case tests for pg_session_jwt
 
--- Set required parameters
--- This is a placeholder value that should be replaced with a real JWK at test time
-SET pg_session_jwt.jwk = '{"kty":"OKP","crv":"Ed25519","x":"PLACEHOLDER_KEY"}';
+-- Initialize the session
 SELECT auth.init();
 
 -- Test error: decreasing token ID

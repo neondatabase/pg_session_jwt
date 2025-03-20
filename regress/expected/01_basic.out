@@ -1,10 +1,5 @@
 -- Basic functionality tests for pg_session_jwt
 
--- Set required parameters
--- Note: In real tests, we'll need to set pg_session_jwt.jwk to a valid JWK
--- This is a placeholder value that should be replaced with a real JWK at test time
-SET pg_session_jwt.jwk = '{"kty":"OKP","crv":"Ed25519","x":"PLACEHOLDER_KEY"}';
-SET
 -- Test auth.init() function
 SELECT auth.init();
  init 

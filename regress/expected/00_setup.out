@@ -2,7 +2,14 @@
 -- Set the JWK parameter as a GUC parameter before connection start
 \set jwk '{"kty":"OKP","crv":"Ed25519","x":"PLACEHOLDER_KEY"}'
 ALTER SYSTEM SET pg_session_jwt.jwk = :'jwk';
+ALTER SYSTEM
 SELECT pg_reload_conf();
+ pg_reload_conf 
+---------------
+ t
+(1 row)
 
 CREATE SCHEMA IF NOT EXISTS auth;
+CREATE SCHEMA
 CREATE EXTENSION pg_session_jwt;
+CREATE EXTENSION
