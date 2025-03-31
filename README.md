@@ -46,7 +46,12 @@ In this mode, you'll need to:
 
 When operating without JWK, the extension works out of the box with PostgREST-compatible JWT claims. No initialization is needed - simply ensure your JWT claims are available as `request.jwt.claim.*` parameters and use `auth.user_id()` to access the subject claim.
 
-This mode provides seamless integration with PostgREST's JWT handling. You can check how PostgREST authentication works in their [docs](https://docs.postgrest.org/en/v12/explanations/db_authz.html).
+This mode provides seamless integration with PostgREST's JWT handling, allowing you to use the same JWT claims for both PostgREST and database functions.
+
+> [!CAUTION]  
+> Security Consideration: When using the fallback mode (without JWK), be aware that `request.jwt.claim.sub` is a regular PostgreSQL parameter that can be modified by any database user. This means users could potentially impersonate others by changing this value.
+>
+> PostgREST handles this securely by setting these claims in a protected context before executing user queries. If you're not using PostgREST, you must ensure these claims are set in a secure way that prevents unauthorized modifications.
 
 Functions
 --------
