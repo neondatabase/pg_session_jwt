@@ -289,6 +289,14 @@ pub mod auth {
 
     #[pg_extern(parallel_safe, stable)]
     pub fn user_id() -> Option<String> {
+        // If the JWK is not defined, we fallback to the request.jwt.claim.sub GUC
+        if NEON_AUTH_JWK.get().is_none() {
+            return Spi::get_one::<String>("SELECT current_setting('request.jwt.claim.sub', true)")
+                .ok()
+                .flatten()
+                .filter(|s| !s.is_empty());
+        }
+
         match validate_jwt()?.get("sub")? {
             serde_json::Value::String(s) => Some(s.clone()),
             _ => error_code!(
