@@ -284,6 +284,20 @@ pub mod auth {
     /// Extract a value from the shared state.
     #[pg_extern(parallel_safe, stable)]
     pub fn session() -> JsonB {
+        // If the JWK is not defined, we fallback to the request.jwt.claims GUC
+        // https://docs.postgrest.org/en/v12/references/transactions.html#request-headers-cookies-and-jwt-claims
+        if NEON_AUTH_JWK.get().is_none() {
+            return match Spi::get_one::<String>("SELECT current_setting('request.jwt.claims', true)")
+                .ok()
+                .flatten()
+                .filter(|s| !s.is_empty()) {
+                Some(claims) => match serde_json::from_str(&claims) {
+                    Ok(json) => JsonB(json),
+                    Err(_) => JsonB(serde_json::Value::Null),
+                },
+                None => JsonB(serde_json::Value::Null),
+            };
+        }
         JsonB(validate_jwt().map_or(serde_json::Value::Null, serde_json::Value::Object))
     }
 

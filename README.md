@@ -68,7 +68,19 @@ Initializes the JWT session with the provided `jwt` as a string. Only needed whe
 
 ### 3\. auth.session() → jsonb
 
-Retrieves JWT session data. Only available when using JWK validation mode.
+Retrieves JWT session data. The behavior depends on whether a JWK is defined:
+
+- When JWK is defined:
+  - Returns the entire validated JWT payload as JSONB.
+  - The JWT must be properly signed and validated.
+  - Contains all claims from the JWT (sub, role, etc.).
+
+- When JWK is not defined:
+  - Falls back to using the value from PostgREST-compatible `request.jwt.claims` parameter.
+  - Returns the claims as JSONB if the parameter is set and contains valid JSON.
+  - Returns JSON null if `request.jwt.claims` is not set, is empty, or contains invalid JSON.
+
+This dual behavior allows for flexible session management while maintaining security when JWK is available, and compatibility with PostgREST JWT claims when operating without JWK.
 
 ### 4\. auth.user\_id() → text
 
