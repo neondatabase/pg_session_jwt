@@ -303,12 +303,20 @@ pub mod auth {
 
     #[pg_extern(parallel_safe, stable)]
     pub fn user_id() -> Option<String> {
-        // If the JWK is not defined, we fallback to the request.jwt.claim.sub GUC
+        // If the JWK is not defined, we fallback to the request.jwt.claims GUC
+        // https://docs.postgrest.org/en/v12/references/transactions.html#request-headers-cookies-and-jwt-claims
         if NEON_AUTH_JWK.get().is_none() {
-            return Spi::get_one::<String>("SELECT current_setting('request.jwt.claim.sub', true)")
+            // Get subject from the claims JSONB
+            return match Spi::get_one::<String>("SELECT current_setting('request.jwt.claims', true)")
                 .ok()
                 .flatten()
-                .filter(|s| !s.is_empty());
+                .filter(|s| !s.is_empty()) {
+                Some(claims) => match serde_json::from_str::<serde_json::Value>(&claims) {
+                    Ok(json) => json.get("sub").and_then(|s| s.as_str()).map(String::from),
+                    Err(_) => None,
+                },
+                None => None,
+            };
         }
 
         match validate_jwt()?.get("sub")? {
