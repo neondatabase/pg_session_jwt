@@ -1,0 +1,2 @@
+-- no migration necessary.
+-- adds postgrest-compatible fallback in auth.user_id() and auth.session()
