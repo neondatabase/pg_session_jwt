@@ -33,12 +33,12 @@ fn main() -> ExitCode {
         test_jwt_claim_sub_with_jwk,
     ));
     tests.push(test_without_jwk(
-        "test_jwt_claim_sub_fallback_when_set",
-        test_jwt_claim_sub_fallback_when_set,
+        "test_jwt_claim_sub_from_claims",
+        test_jwt_claim_sub_from_claims,
     ));
     tests.push(test_without_jwk(
-        "test_jwt_claim_sub_fallback_when_not_set",
-        test_jwt_claim_sub_fallback_when_not_set,
+        "test_jwt_claim_sub_when_claims_not_set",
+        test_jwt_claim_sub_when_claims_not_set,
     ));
     tests.push(test_fn(
         "test_session_with_jwk",
@@ -184,35 +184,6 @@ fn test_bgworker(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postg
     Ok(())
 }
 
-fn test_jwt_claim_sub_fallback_when_set(tx: &mut postgres::Client) -> Result<(), postgres::Error> {
-    // Test when JWK is not defined and request.jwt.claim.sub is set
-    tx.execute("SET request.jwt.claim.sub = 'test-user'", &[])?;
-    let user_id = tx.query_one("SELECT auth.user_id()", &[])?;
-    let user_id: Option<String> = user_id.get(0);
-    assert_eq!(
-        user_id,
-        Some("test-user".to_string()),
-        "Should return the value from request.jwt.claim.sub when set"
-    );
-
-    Ok(())
-}
-
-fn test_jwt_claim_sub_fallback_when_not_set(
-    tx: &mut postgres::Client,
-) -> Result<(), postgres::Error> {
-    // Test when JWK is not defined and request.jwt.claim.sub is not set
-    tx.execute("RESET request.jwt.claim.sub", &[])?;
-    let user_id = tx.query_one("SELECT auth.user_id()", &[])?;
-    let user_id: Option<String> = user_id.get(0);
-    assert_eq!(
-        user_id, None,
-        "Should return NULL when request.jwt.claim.sub is not set"
-    );
-
-    Ok(())
-}
-
 fn test_jwt_claim_sub_with_jwk(
     sk: &SigningKey,
     tx: &mut postgres::Client,
@@ -224,14 +195,43 @@ fn test_jwt_claim_sub_with_jwk(
     tx.execute("select auth.init()", &[])?;
     tx.execute("select auth.jwt_session_init($1)", &[&jwt])?;
 
-    // Set request.jwt.claim.sub, but it should be ignored since JWK is defined
-    tx.execute("SET request.jwt.claim.sub = 'fallback-user'", &[])?;
+    // Set request.jwt.claims, but it should be ignored since JWK is defined
+    tx.execute("SET request.jwt.claims = '{\"sub\":\"fallback-user\"}'", &[])?;
     let user_id = tx.query_one("SELECT auth.user_id()", &[])?;
     let user_id: Option<String> = user_id.get(0);
     assert_eq!(
         user_id,
         Some("jwt-user".to_string()),
         "Should use JWT sub claim when JWK is defined"
+    );
+
+    Ok(())
+}
+
+fn test_jwt_claim_sub_from_claims(tx: &mut postgres::Client) -> Result<(), postgres::Error> {
+    // Test when JWK is not defined and request.jwt.claims contains sub
+    tx.execute("SET request.jwt.claims = '{\"sub\":\"test-user\"}'", &[])?;
+    let user_id = tx.query_one("SELECT auth.user_id()", &[])?;
+    let user_id: Option<String> = user_id.get(0);
+    assert_eq!(
+        user_id,
+        Some("test-user".to_string()),
+        "Should return the value from request.jwt.claims sub field"
+    );
+
+    Ok(())
+}
+
+fn test_jwt_claim_sub_when_claims_not_set(
+    tx: &mut postgres::Client,
+) -> Result<(), postgres::Error> {
+    // Test when JWK is not defined and request.jwt.claims is not set
+    tx.execute("RESET request.jwt.claims", &[])?;
+    let user_id = tx.query_one("SELECT auth.user_id()", &[])?;
+    let user_id: Option<String> = user_id.get(0);
+    assert_eq!(
+        user_id, None,
+        "Should return NULL when request.jwt.claims is not set"
     );
 
     Ok(())
