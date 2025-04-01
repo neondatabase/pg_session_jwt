@@ -242,7 +242,7 @@ pub mod auth {
                 Some((cached_jwt, payload)) if cached_jwt == jwt => {
                     log_audit_validated_jwt(payload);
                     Some(payload.clone())
-                },
+                }
                 _ => {
                     let (body, sig) = jwt.rsplit_once('.').unwrap_or_else(|| {
                         error_code!(
@@ -281,42 +281,47 @@ pub mod auth {
         );
     }
 
+    fn log_audit_guc_claims(claims: Option<&Object>) {
+        match claims {
+            Some(payload) => log!(
+                "JWT claims from GUC variable: sub={} and aud={}",
+                payload.get("sub").unwrap_or(&"".into()),
+                payload.get("aud").unwrap_or(&"".into())
+            ),
+            None => log!("No JWT claims found in GUC variable"),
+        }
+    }
+
+    fn get_claims_from_guc() -> Option<serde_json::Value> {
+        let claims: Option<serde_json::Value> = Spi::get_one::<String>("SELECT current_setting('request.jwt.claims', true)")
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty())
+            .and_then(|claims| serde_json::from_str(&claims).ok());
+        
+        log_audit_guc_claims(claims.as_ref().and_then(|v| v.as_object()));
+        claims
+    }
+
     /// Extract a value from the shared state.
     #[pg_extern(parallel_safe, stable)]
     pub fn session() -> JsonB {
         // If the JWK is not defined, we fallback to the request.jwt.claims GUC
         // https://docs.postgrest.org/en/v12/references/transactions.html#request-headers-cookies-and-jwt-claims
         if NEON_AUTH_JWK.get().is_none() {
-            return match Spi::get_one::<String>("SELECT current_setting('request.jwt.claims', true)")
-                .ok()
-                .flatten()
-                .filter(|s| !s.is_empty()) {
-                Some(claims) => match serde_json::from_str(&claims) {
-                    Ok(json) => JsonB(json),
-                    Err(_) => JsonB(serde_json::Value::Null),
-                },
-                None => JsonB(serde_json::Value::Null),
-            };
+            return JsonB(get_claims_from_guc().unwrap_or(serde_json::Value::Null));
         }
         JsonB(validate_jwt().map_or(serde_json::Value::Null, serde_json::Value::Object))
     }
 
     #[pg_extern(parallel_safe, stable)]
     pub fn user_id() -> Option<String> {
-        // If the JWK is not defined, we fallback to the request.jwt.claims GUC
         // https://docs.postgrest.org/en/v12/references/transactions.html#request-headers-cookies-and-jwt-claims
         if NEON_AUTH_JWK.get().is_none() {
             // Get subject from the claims JSONB
-            return match Spi::get_one::<String>("SELECT current_setting('request.jwt.claims', true)")
-                .ok()
-                .flatten()
-                .filter(|s| !s.is_empty()) {
-                Some(claims) => match serde_json::from_str::<serde_json::Value>(&claims) {
-                    Ok(json) => json.get("sub").and_then(|s| s.as_str()).map(String::from),
-                    Err(_) => None,
-                },
-                None => None,
-            };
+            return get_claims_from_guc()
+                .and_then(|json| json.get("sub").cloned())
+                .and_then(|s| s.as_str().map(|s| s.to_owned()));
         }
 
         match validate_jwt()?.get("sub")? {
