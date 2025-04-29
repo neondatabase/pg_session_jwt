@@ -240,7 +240,7 @@ pub mod auth {
         JWT.with_borrow_mut(|cached_jwt| {
             match cached_jwt {
                 Some((cached_jwt, payload)) if cached_jwt == jwt => {
-                    log_audit_validated_jwt(payload);
+                    // log_audit_validated_jwt(payload);
                     Some(payload.clone())
                 }
                 _ => {
@@ -266,40 +266,41 @@ pub mod auth {
                     // update state
                     JTI.replace(jti);
                     *cached_jwt = Some((jwt.to_string(), payload.clone()));
-                    log_audit_validated_jwt(&payload);
+                    // log_audit_validated_jwt(&payload);
                     Some(payload)
                 }
             }
         })
     }
 
-    fn log_audit_validated_jwt(payload: &Object) {
-        log!(
-            "JWT issued for sub={} and aud={} was succesfully validated",
-            payload.get("sub").unwrap_or(&"".into()),
-            payload.get("aud").unwrap_or(&"".into())
-        );
-    }
+    // fn log_audit_validated_jwt(payload: &Object) {
+    //     log!(
+    //         "JWT issued for sub={} and aud={} was succesfully validated",
+    //         payload.get("sub").unwrap_or(&"".into()),
+    //         payload.get("aud").unwrap_or(&"".into())
+    //     );
+    // }
 
-    fn log_audit_guc_claims(claims: Option<&Object>) {
-        match claims {
-            Some(payload) => log!(
-                "JWT claims from GUC variable: sub={} and aud={}",
-                payload.get("sub").unwrap_or(&"".into()),
-                payload.get("aud").unwrap_or(&"".into())
-            ),
-            None => log!("No JWT claims found in GUC variable"),
-        }
-    }
+    // fn log_audit_guc_claims(claims: Option<&Object>) {
+    //     match claims {
+    //         Some(payload) => log!(
+    //             "JWT claims from GUC variable: sub={} and aud={}",
+    //             payload.get("sub").unwrap_or(&"".into()),
+    //             payload.get("aud").unwrap_or(&"".into())
+    //         ),
+    //         None => log!("No JWT claims found in GUC variable"),
+    //     }
+    // }
 
     fn get_claims_from_guc() -> Option<serde_json::Value> {
-        let claims: Option<serde_json::Value> = Spi::get_one::<String>("SELECT current_setting('request.jwt.claims', true)")
-            .ok()
-            .flatten()
-            .filter(|s| !s.is_empty())
-            .and_then(|claims| serde_json::from_str(&claims).ok());
-        
-        log_audit_guc_claims(claims.as_ref().and_then(|v| v.as_object()));
+        let claims: Option<serde_json::Value> =
+            Spi::get_one::<String>("SELECT current_setting('request.jwt.claims', true)")
+                .ok()
+                .flatten()
+                .filter(|s| !s.is_empty())
+                .and_then(|claims| serde_json::from_str(&claims).ok());
+
+        // log_audit_guc_claims(claims.as_ref().and_then(|v| v.as_object()));
         claims
     }
 
