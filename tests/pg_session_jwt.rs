@@ -196,7 +196,10 @@ fn test_jwt_claim_sub_with_jwk(
     tx.execute("select auth.jwt_session_init($1)", &[&jwt])?;
 
     // Set request.jwt.claims, but it should be ignored since JWK is defined
-    tx.execute("SET request.jwt.claims = '{\"sub\":\"fallback-user\"}'", &[])?;
+    tx.execute(
+        "SET request.jwt.claims = '{\"sub\":\"fallback-user\"}'",
+        &[],
+    )?;
     let user_id = tx.query_one("SELECT auth.user_id()", &[])?;
     let user_id: Option<String> = user_id.get(0);
     assert_eq!(
@@ -237,7 +240,10 @@ fn test_jwt_claim_sub_when_claims_not_set(
     Ok(())
 }
 
-fn test_session_with_jwk(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postgres::Error> {
+fn test_session_with_jwk(
+    sk: &SigningKey,
+    tx: &mut postgres::Client,
+) -> Result<(), postgres::Error> {
     let header = r#"{"kid":1}"#;
     let jwt = sign_jwt(sk, header, r#"{"sub":"jwt-user","jti":1,"role":"admin"}"#);
 
@@ -246,29 +252,47 @@ fn test_session_with_jwk(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(
     tx.execute("select auth.jwt_session_init($1)", &[&jwt])?;
 
     // Set request.jwt.claims, but it should be ignored since JWK is defined
-    tx.execute("SET request.jwt.claims = '{\"sub\":\"fallback-user\",\"role\":\"user\"}'", &[])?;
-    
+    tx.execute(
+        "SET request.jwt.claims = '{\"sub\":\"fallback-user\",\"role\":\"user\"}'",
+        &[],
+    )?;
+
     let sub: Option<String> = tx.query_one("SELECT (auth.session()->>'sub')", &[])?.get(0);
-    assert_eq!(sub, Some("jwt-user".to_string()), "Should use JWT sub claim when JWK is defined");
-    
-    let role: Option<String> = tx.query_one("SELECT (auth.session()->>'role')", &[])?.get(0);
-    assert_eq!(role, Some("admin".to_string()), "Should use JWT role claim when JWK is defined");
+    assert_eq!(
+        sub,
+        Some("jwt-user".to_string()),
+        "Should use JWT sub claim when JWK is defined"
+    );
+
+    let role: Option<String> = tx
+        .query_one("SELECT (auth.session()->>'role')", &[])?
+        .get(0);
+    assert_eq!(
+        role,
+        Some("admin".to_string()),
+        "Should use JWT role claim when JWK is defined"
+    );
 
     Ok(())
 }
 
 fn test_session_fallback_when_set(tx: &mut postgres::Client) -> Result<(), postgres::Error> {
     // Test when JWK is not defined and request.jwt.claims is set
-    tx.execute("SET request.jwt.claims = '{\"sub\":\"test-user\",\"role\":\"admin\"}'", &[])?;
-    
+    tx.execute(
+        "SET request.jwt.claims = '{\"sub\":\"test-user\",\"role\":\"admin\"}'",
+        &[],
+    )?;
+
     let sub: Option<String> = tx.query_one("SELECT (auth.session()->>'sub')", &[])?.get(0);
     assert_eq!(
         sub,
         Some("test-user".to_string()),
         "Should return sub from request.jwt.claims when set"
     );
-    
-    let role: Option<String> = tx.query_one("SELECT (auth.session()->>'role')", &[])?.get(0);
+
+    let role: Option<String> = tx
+        .query_one("SELECT (auth.session()->>'role')", &[])?
+        .get(0);
     assert_eq!(
         role,
         Some("admin".to_string()),
@@ -281,9 +305,12 @@ fn test_session_fallback_when_set(tx: &mut postgres::Client) -> Result<(), postg
 fn test_session_fallback_when_not_set(tx: &mut postgres::Client) -> Result<(), postgres::Error> {
     // Test when JWK is not defined and request.jwt.claims is not set
     tx.execute("RESET request.jwt.claims", &[])?;
-    
+
     let session: String = tx.query_one("SELECT auth.session()::text", &[])?.get(0);
-    assert_eq!(session, "null", "Should return null when request.jwt.claims is not set");
+    assert_eq!(
+        session, "null",
+        "Should return null when request.jwt.claims is not set"
+    );
 
     let is_null: bool = tx.query_one("SELECT auth.session() IS NULL", &[])?.get(0);
     assert!(!is_null, "Session should return JSON null, not SQL NULL");
