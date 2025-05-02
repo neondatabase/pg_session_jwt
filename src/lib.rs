@@ -40,6 +40,8 @@ pub mod auth {
 
     type Object = serde_json::Map<String, serde_json::Value>;
 
+    const CLOCK_SKEW_LEEWAY: Duration = Duration::from_secs(60);
+
     /// A octet key pair CFRG-curve key, as defined in [RFC 8037]
     ///
     /// [RFC 8037]: https://www.rfc-editor.org/rfc/rfc8037
@@ -164,6 +166,9 @@ pub mod auth {
                     "could not get current unix epoch",
                 )
             });
+
+        let leeway = AnyNumeric::from(CLOCK_SKEW_LEEWAY.as_secs());
+
         if let Some(nbf) = payload.get("nbf") {
             let nbf = nbf.as_i64().unwrap_or_else(|| {
                 error_code!(
@@ -173,7 +178,7 @@ pub mod auth {
             });
             let nbf = AnyNumeric::from(nbf);
 
-            if now < nbf {
+            if now + leeway < nbf {
                 error_code!(
                     PgSqlErrorCode::ERRCODE_CHECK_VIOLATION,
                     "Token used before it is ready",
@@ -189,7 +194,7 @@ pub mod auth {
             });
             let exp = AnyNumeric::from(exp);
 
-            if exp < now {
+            if exp + leeway < now {
                 error_code!(
                     PgSqlErrorCode::ERRCODE_CHECK_VIOLATION,
                     "Token used after it has expired",
