@@ -1,0 +1,2 @@
+-- no migration necessary.
+-- adds 60s leeway to expiration validation
