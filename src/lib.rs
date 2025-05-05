@@ -283,7 +283,18 @@ pub mod auth {
         })
     }
 
+    fn can_log_audit() -> bool {
+        Spi::get_one::<i64>("SELECT 1 FROM pg_extension where extname = 'pgaudit'")
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
     fn log_audit_validated_jwt(payload: &Object) {
+        if !can_log_audit() {
+            return;
+        }
+
         log!(
             "JWT issued for sub={} and aud={} was succesfully validated",
             payload.get("sub").unwrap_or(&"".into()),
@@ -292,6 +303,10 @@ pub mod auth {
     }
 
     fn log_audit_guc_claims(guc: &str, claims: Option<&Object>) {
+        if !can_log_audit() {
+            return;
+        }
+
         match claims {
             Some(payload) => log!(
                 "JWT claims from GUC '{}': sub={} and aud={}",
