@@ -36,7 +36,7 @@ pub fn init() {
     GucRegistry::define_string_guc(
         NEON_AUTH_ENABLE_AUDIT_LOG_PARAM,
         "Enable audit logs",
-        "Setting as 'true' enables audit logs that are produced each time JWT is validated and/or read",
+        "Setting as 'on' enables audit logs that are produced each time JWT is validated and/or read",
         &NEON_AUTH_ENABLE_AUDIT_LOG,
         GucContext::Suset,
         GucFlags::NOT_WHILE_SEC_REST,

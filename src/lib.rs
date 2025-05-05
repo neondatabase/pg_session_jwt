@@ -289,8 +289,8 @@ pub mod auth {
             .get()
             .unwrap_or(CString::default().as_c_str())
             .to_str()
-            .unwrap_or("")
-            == "true"
+            .unwrap_or("off")
+            == "on"
     }
 
     fn log_audit_validated_jwt(payload: &Object) {
