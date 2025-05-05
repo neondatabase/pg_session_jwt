@@ -36,7 +36,8 @@ pub mod auth {
     use serde::de::DeserializeOwned;
 
     use crate::gucs::{
-        NEON_AUTH_JWK, NEON_AUTH_JWK_RUNTIME_PARAM, NEON_AUTH_JWT, NEON_AUTH_JWT_RUNTIME_PARAM,
+        NEON_AUTH_ENABLE_AUDIT_LOG, NEON_AUTH_JWK, NEON_AUTH_JWK_RUNTIME_PARAM, NEON_AUTH_JWT,
+        NEON_AUTH_JWT_RUNTIME_PARAM, POSTGREST_JWT, POSTGREST_JWT_RUNTIME_PARAM,
     };
 
     type Object = serde_json::Map<String, serde_json::Value>;
@@ -284,10 +285,12 @@ pub mod auth {
     }
 
     fn can_log_audit() -> bool {
-        Spi::get_one::<i64>("SELECT 1 FROM pg_extension where extname = 'pgaudit'")
-            .ok()
-            .flatten()
-            .is_some()
+        NEON_AUTH_ENABLE_AUDIT_LOG
+            .get()
+            .unwrap_or(CString::default().as_c_str())
+            .to_str()
+            .unwrap_or("")
+            == "true"
     }
 
     fn log_audit_validated_jwt(payload: &Object) {
@@ -319,15 +322,13 @@ pub mod auth {
     }
 
     fn get_claims_from_guc() -> Option<serde_json::Value> {
-        let guc = "request.jwt.claims";
         let claims: Option<serde_json::Value> =
-            Spi::get_one::<String>(format!("SELECT current_setting('{}', true)", guc).as_str())
-                .ok()
-                .flatten()
-                .filter(|s| !s.is_empty())
-                .and_then(|claims| serde_json::from_str(&claims).ok());
+            serde_json::from_str(POSTGREST_JWT.get()?.to_str().unwrap_or("")).ok();
 
-        log_audit_guc_claims(guc, claims.as_ref().and_then(|v| v.as_object()));
+        log_audit_guc_claims(
+            POSTGREST_JWT_RUNTIME_PARAM,
+            claims.as_ref().and_then(|v| v.as_object()),
+        );
         claims
     }
 
