@@ -285,12 +285,8 @@ pub mod auth {
     }
 
     fn can_log_audit() -> bool {
-        NEON_AUTH_ENABLE_AUDIT_LOG
-            .get()
-            .unwrap_or(CString::default().as_c_str())
-            .to_str()
-            .unwrap_or("off")
-            == "on"
+        let log_var = NEON_AUTH_ENABLE_AUDIT_LOG.get().map(|x| x.as_bytes());
+        matches!(log_var, Some(b"on"))
     }
 
     fn log_audit_validated_jwt(payload: &Object) {
