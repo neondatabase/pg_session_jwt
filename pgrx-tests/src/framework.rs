@@ -10,11 +10,9 @@
 //LICENSE
 //LICENSE Use of this source code is governed by the MIT license that can be found in the LICENSE file.
 use std::collections::HashSet;
-use std::env::VarError;
 use std::process::{Command, Stdio};
 
 use eyre::{eyre, WrapErr};
-use once_cell::sync::Lazy;
 use owo_colors::OwoColorize;
 use pgrx::prelude::*;
 use pgrx_pg_config::{
@@ -22,14 +20,16 @@ use pgrx_pg_config::{
 };
 use postgres::error::DbError;
 use std::collections::HashMap;
+use std::env::VarError;
+use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use sysinfo::{Pid, System};
 
 mod shutdown;
-use shutdown::add_shutdown_hook;
+pub use shutdown::add_shutdown_hook;
 
 type LogLines = Arc<Mutex<HashMap<String, Vec<String>>>>;
 
@@ -39,13 +39,7 @@ struct SetupState {
     system_session_id: String,
 }
 
-static TEST_MUTEX: Lazy<Mutex<SetupState>> = Lazy::new(|| {
-    Mutex::new(SetupState {
-        installed: false,
-        loglines: Arc::new(Mutex::new(HashMap::new())),
-        system_session_id: "NONE".to_string(),
-    })
-});
+static TEST_MUTEX: OnceLock<Mutex<SetupState>> = OnceLock::new();
 
 // The goal of this closure is to allow "wrapping" of anything that might issue
 // an SQL simple_query or query using either a postgres::Client or
@@ -63,7 +57,7 @@ where
         Option<&[&(dyn postgres::types::ToSql + Sync)]>,
     ) -> Result<T, postgres::Error>,
 {
-    let result = f(query.clone(), query_params.clone());
+    let result = f(query.clone(), query_params);
 
     match result {
         Ok(result) => Ok(result),
@@ -75,7 +69,7 @@ where
                 let code = dberror.code().code();
                 let severity = dberror.severity();
 
-                let mut message = format!("{} SQLSTATE[{}]", severity, code)
+                let mut message = format!("{severity} SQLSTATE[{code}]")
                     .bold()
                     .red()
                     .to_string();
@@ -86,7 +80,7 @@ where
                     format!(
                         "\nparams: {}",
                         match query_params {
-                            Some(params) => format!("{:?}", params),
+                            Some(params) => format!("{params:?}"),
                             None => "None".to_string(),
                         }
                     )
@@ -108,7 +102,7 @@ where
 
                 Err(eyre!(message))
             } else {
-                return Err(e).wrap_err("non-DbError");
+                Err(e).wrap_err("non-DbError")
             }
         }
     }
@@ -124,7 +118,7 @@ pub fn run_test(
         eprintln!("Skipping test because `PGRX_TEST_SKIP` is set in the environment",);
         return Ok(());
     }
-    let (loglines, system_session_id) = initialize_test_framework(postgresql_conf)?;
+    let (loglines, system_session_id) = get_test_framework(postgresql_conf)?;
 
     {
         let (mut client, _) = client(None, &get_pg_user())?;
@@ -176,7 +170,7 @@ pub fn run_test(
                 (
                     "<unknown>".to_string(),
                     "<unknown>".to_string(),
-                    format!("{error_as_string}"),
+                    error_as_string.to_string(),
                 )
             };
 
@@ -218,33 +212,49 @@ fn format_loglines(session_id: &str, loglines: &LogLines) -> String {
     result
 }
 
-fn initialize_test_framework(
-    postgresql_conf: Vec<&'static str>,
-) -> eyre::Result<(LogLines, String)> {
-    let mut state = TEST_MUTEX.lock().unwrap_or_else(|_| {
-        // This used to immediately throw an std::process::exit(1), but it
-        // would consume both stdout and stderr, resulting in error messages
-        // not being displayed unless you were running tests with --nocapture.
-        panic!(
+fn get_test_framework(postgresql_conf: Vec<&'static str>) -> eyre::Result<(LogLines, String)> {
+    let mut state = TEST_MUTEX
+        .get_or_init(|| {
+            Mutex::new(SetupState {
+                installed: false,
+                loglines: Arc::new(Mutex::new(HashMap::new())),
+                system_session_id: "NONE".to_string(),
+            })
+        })
+        .lock()
+        .unwrap_or_else(|_| {
+            // This used to immediately throw an std::process::exit(1), but it
+            // would consume both stdout and stderr, resulting in error messages
+            // not being displayed unless you were running tests with --nocapture.
+            panic!(
             "Could not obtain test mutex. A previous test may have hard-aborted while holding it."
         );
-    });
+        });
 
     if !state.installed {
-        shutdown::register_shutdown_hook();
-        install_extension()?;
-        initdb(postgresql_conf)?;
-
-        let system_session_id = start_pg(state.loglines.clone())?;
-        let pg_config = get_pg_config()?;
-        dropdb()?;
-        createdb(&pg_config, get_pg_dbname(), true, false, get_runas())?;
-        create_extension()?;
-        state.installed = true;
-        state.system_session_id = system_session_id;
+        initialize_test_framework(&mut state, postgresql_conf)
+            .expect("Could not initialize test framework");
     }
 
     Ok((state.loglines.clone(), state.system_session_id.clone()))
+}
+
+fn initialize_test_framework(
+    state: &mut SetupState,
+    postgresql_conf: Vec<&'static str>,
+) -> eyre::Result<()> {
+    shutdown::register_shutdown_hook();
+    install_extension()?;
+    initdb(postgresql_conf)?;
+
+    let system_session_id = start_pg(state.loglines.clone())?;
+    let pg_config = get_pg_config()?;
+    dropdb()?;
+    createdb(&pg_config, get_pg_dbname(), true, false, get_runas())?;
+    create_extension()?;
+    state.installed = true;
+    state.system_session_id = system_session_id;
+    Ok(())
 }
 
 fn get_pg_config() -> eyre::Result<PgConfig> {
@@ -253,12 +263,9 @@ fn get_pg_config() -> eyre::Result<PgConfig> {
     let pg_version = pg_sys::get_pg_major_version_num();
 
     let pg_config = pgrx
-        .get(&format!("pg{}", pg_version))
+        .get(&format!("pg{pg_version}"))
         .wrap_err_with(|| {
-            format!(
-                "Error getting pg_config: {} is not a valid postgres version",
-                pg_version
-            )
+            format!("Error getting pg_config: {pg_version} is not a valid postgres version")
         })
         .unwrap()
         .clone();
@@ -279,7 +286,7 @@ fn client(options: Option<&str>, user: &str) -> eyre::Result<(postgres::Client, 
                 .expect("unable to determine test port"),
         )
         .user(user)
-        .dbname(&get_pg_dbname());
+        .dbname(get_pg_dbname());
 
     if let Some(options) = options {
         config.options(options);
@@ -296,7 +303,7 @@ fn client(options: Option<&str>, user: &str) -> eyre::Result<(postgres::Client, 
     )
     .wrap_err("There was an issue attempting to get the session ID from Postgres")?;
 
-    let session_id = match sid_query_result.get(0) {
+    let session_id = match sid_query_result.first() {
         Some(row) => row.get::<&str, &str>("sid").to_string(),
         None => Err(eyre!("Failed to obtain a client Session ID from Postgres"))?,
     };
@@ -328,7 +335,6 @@ fn client(options: Option<&str>, user: &str) -> eyre::Result<(postgres::Client, 
 }
 
 fn install_extension() -> eyre::Result<()> {
-    eprintln!("installing extension");
     let profile = std::env::var("PGRX_BUILD_PROFILE").unwrap_or("debug".into());
     let no_schema = std::env::var("PGRX_NO_SCHEMA").unwrap_or("false".into()) == "true";
     let mut features = std::env::var("PGRX_FEATURES")
@@ -346,7 +352,6 @@ fn install_extension() -> eyre::Result<()> {
     let pgrx = Pgrx::from_config()?;
     let pg_config = pgrx.get(&pg_version)?;
     let cargo_test_args = get_cargo_test_features()?;
-    println!("detected cargo args: {:?}", cargo_test_args);
 
     features.extend(cargo_test_args.features.iter().cloned());
 
@@ -357,8 +362,16 @@ fn install_extension() -> eyre::Result<()> {
         .arg("--pg-config")
         .arg(pg_config.path().ok_or(eyre!("No pg_config found"))?)
         .stdout(Stdio::inherit())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::inherit())
         .env("CARGO_TARGET_DIR", get_target_dir()?);
+
+    if requires_runas() {
+        // if we're running tests as a different operating-system user we, then actually need to
+        // install the extension artifacts as "root", as it's the user that'll definitely
+        // be able to write to Postgres' various artifact directories.  "root" is also the default
+        // owner of these directories for distro-managed Postgres extensions
+        command.arg("--sudo");
+    }
 
     if let Ok(manifest_path) = std::env::var("PGRX_MANIFEST_PATH") {
         command.arg("--manifest-path");
@@ -398,19 +411,15 @@ fn install_extension() -> eyre::Result<()> {
         command.arg("--no-schema");
     }
 
-    let command_str = format!("{:?}", command);
+    let command_str = format!("{command:?}");
 
     let child = command.spawn().wrap_err_with(|| {
-        format!(
-            "Failed to spawn process for installing extension using command: '{}': ",
-            command_str
-        )
+        format!("Failed to spawn process for installing extension using command: '{command_str}': ")
     })?;
 
     let output = child.wait_with_output().wrap_err_with(|| {
         format!(
-            "Failed waiting for spawned process attempting to install extension using command: '{}': ",
-            command_str
+            "Failed waiting for spawned process attempting to install extension using command: '{command_str}': "
         )
     })?;
 
@@ -426,37 +435,88 @@ fn install_extension() -> eyre::Result<()> {
     Ok(())
 }
 
+/// Maybe make the `$PGDATA` directory, if it doesn't exist.
+///
+/// Returns true if `initdb` should be run against the directory.
+fn maybe_make_pgdata<P: AsRef<Path>>(pgdata: P) -> eyre::Result<bool> {
+    let pgdata = pgdata.as_ref();
+    let mut need_initdb = false;
+
+    if let Some(runas) = get_runas() {
+        // we've been asked to run as a different user.  As such, the PGDATA directory we just created
+        // needs to be owned by that user.
+        //
+        // In order to do that, we must become that user to create it
+
+        let mut mkdir = sudo_command(&runas);
+        mkdir
+            .arg("mkdir")
+            .arg("-p")
+            .arg(pgdata)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let command_str = format!("{:?}", mkdir);
+        println!("{} {}", "     Running".bold().green(), command_str);
+        let child = mkdir.spawn()?;
+        let output = child.wait_with_output()?;
+        if !output.status.success() {
+            panic!(
+                "failed to create the PGDATA directory at `{}`:\n{}{}",
+                pgdata.display().yellow(),
+                String::from_utf8(output.stdout).unwrap(),
+                String::from_utf8(output.stderr).unwrap()
+            );
+        }
+
+        // a PGDATA directory created as a different user will always need `initdb` to be run
+        need_initdb = true;
+    } else {
+        // if the directory doesn't exist, make it. If it does, then we reuse it
+        if !pgdata.exists() {
+            std::fs::create_dir_all(pgdata.parent().unwrap())?;
+
+            // which is the only time we need to `initdb` it.
+            need_initdb = true;
+        }
+    }
+
+    Ok(need_initdb)
+}
+
 fn initdb(postgresql_conf: Vec<&'static str>) -> eyre::Result<()> {
     let pgdata = get_pgdata_path()?;
 
-    if !pgdata.is_dir() {
+    let need_initdb = maybe_make_pgdata(&pgdata)?;
+
+    if need_initdb {
         let pg_config = get_pg_config()?;
-        let mut command = Command::new(
-            pg_config
-                .initdb_path()
-                .wrap_err("unable to determine initdb path")?,
-        );
+        let initdb_path = pg_config
+            .initdb_path()
+            .wrap_err("unable to determine initdb path")?;
+
+        let mut command = if let Some(runas) = get_runas() {
+            let mut cmd = sudo_command(runas);
+            cmd.arg(initdb_path);
+            cmd
+        } else {
+            Command::new(initdb_path)
+        };
 
         command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .current_dir(pgdata.parent().unwrap())
             .args(get_c_locale_flags())
             .arg("-D")
-            .arg(pgdata.to_str().unwrap())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit());
+            .arg(&pgdata);
 
-        let command_str = format!("{:?}", command);
+        let command_str = format!("{command:?}");
 
-        let child = command.spawn().wrap_err_with(|| {
+        println!("{} {}", "     Running".bold().green(), command_str);
+
+        let output = command.output().wrap_err_with(|| {
             format!(
-                "Failed to spawn process for initializing database using command: '{}': ",
-                command_str
-            )
-        })?;
-
-        let output = child.wait_with_output().wrap_err_with(|| {
-            format!(
-                "Failed waiting for spawned process attempting to initialize database using command: '{}': ",
-                command_str
+                "Failed to spawn process for initializing database using command: '{command_str}': "
             )
         })?;
 
@@ -468,98 +528,291 @@ fn initdb(postgresql_conf: Vec<&'static str>) -> eyre::Result<()> {
                 String::from_utf8(output.stderr).unwrap()
             ));
         }
+
+        println!("{} initializing database", "    Finished".bold().green());
     }
 
     modify_postgresql_conf(pgdata, postgresql_conf)
 }
 
 fn modify_postgresql_conf(pgdata: PathBuf, postgresql_conf: Vec<&'static str>) -> eyre::Result<()> {
-    let mut postgresql_conf_file = std::fs::OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .open(format!("{}/postgresql.auto.conf", pgdata.display()))
-        .wrap_err("couldn't open postgresql.auto.conf")?;
-    postgresql_conf_file
-        .write_all("log_line_prefix='[%m] [%p] [%c]: '\n".as_bytes())
-        .wrap_err("couldn't append log_line_prefix")?;
+    let mut contents = String::new();
 
+    contents.push_str("log_line_prefix='[%m] [%p] [%c]: '\n");
+    contents.push_str(&format!(
+        "unix_socket_directories = '{}'\n",
+        pgdata
+            .parent()
+            .unwrap()
+            .display()
+            .to_string()
+            .replace("\\", "\\\\")
+    ));
     for setting in postgresql_conf {
-        postgresql_conf_file
-            .write_all(format!("{setting}\n").as_bytes())
-            .wrap_err("couldn't append custom setting to postgresql.conf")?;
+        contents.push_str(&format!("{setting}\n"));
     }
 
-    postgresql_conf_file
-        .write_all(
-            format!(
-                "unix_socket_directories = '{}'",
-                Pgrx::home().unwrap().display()
-            )
-            .as_bytes(),
-        )
-        .wrap_err("couldn't append `unix_socket_directories` setting to postgresql.conf")?;
+    let postgresql_auto_conf = pgdata.join("postgresql.auto.conf");
+
+    if let Some(runas) = get_runas() {
+        let mut sudo_command = sudo_command(&runas)
+            .arg("tee")
+            .arg(postgresql_auto_conf)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .wrap_err("Failed to execute sudo command")?;
+
+        if let Some(stdin) = sudo_command.stdin.as_mut() {
+            stdin.write_all(contents.as_bytes())?;
+        } else {
+            return Err(eyre!("Failed to get stdin for sudo command"));
+        }
+
+        let sudo_status = sudo_command.wait()?;
+        if !sudo_status.success() {
+            return Err(eyre!("Failed to write contents with sudo"));
+        }
+    } else {
+        std::fs::write(postgresql_auto_conf, contents.as_bytes())?;
+    }
+
     Ok(())
 }
 
 fn start_pg(loglines: LogLines) -> eyre::Result<String> {
     wait_for_pidfile()?;
 
-    let pg_config = get_pg_config()?;
-    let postmaster_path = pg_config
-        .postmaster_path()
-        .wrap_err("unable to determine postmaster path")?;
+    #[cfg(target_family = "unix")]
+    let pipe = pipe::UnixFifo::create()?;
+    #[cfg(target_family = "unix")]
+    let make_pipe_opened_without_blocking = pipe.full()?;
+    #[cfg(target_os = "windows")]
+    let mut pipe = pipe::WindowsNamedPipe::create()?;
 
-    let mut command = if use_valgrind() {
-        let mut cmd = Command::new("valgrind");
-        cmd.args([
-            "--leak-check=no",
-            "--gen-suppressions=all",
-            "--time-stamp=yes",
-            "--error-markers=VALGRINDERROR-BEGIN,VALGRINDERROR-END",
-            "--trace-children=yes",
-        ]);
-        // Try to provide a suppressions file, we'll likely get false positives
-        // if we can't, but that might be better than nothing.
+    let pg_config = get_pg_config()?;
+    let pg_ctl = pg_config.pg_ctl_path()?;
+
+    let postmaster_path = if use_valgrind() {
+        #[allow(unused_mut)]
+        let mut builder = tempfile::Builder::new();
+        #[cfg(target_family = "unix")]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let permission = std::fs::Permissions::from_mode(0o700);
+            builder.permissions(permission);
+        }
+        let mut file = builder.tempfile()?;
+        file.write_all(b"#!/usr/bin/sh\n")?;
+        let mut command = Command::new("valgrind");
+        command.arg("--leak-check=no");
+        command.arg("--gen-suppressions=all");
+        command.arg("--time-stamp=yes");
+        command.arg("--error-markers=VALGRINDERROR-BEGIN,VALGRINDERROR-END");
+        command.arg("--trace-children=yes");
         if let Ok(path) = valgrind_suppressions_path(&pg_config) {
-            if path.exists() {
-                cmd.arg(format!("--suppressions={}", path.display()));
+            if let Ok(true) = std::fs::exists(&path) {
+                command.arg(format!("--suppressions={}", path.display()));
             }
         }
+        command.arg(pg_config.postmaster_path()?.display().to_string());
+        file.write_all(format!("{command:?}").as_bytes())?;
+        file.write_all(b" \"$@\"\n")?;
+        Some(file.into_temp_path())
+    } else {
+        None
+    };
 
-        cmd.arg(postmaster_path);
+    let postmaster_args = vec![
+        "-i".into(),
+        "-p".into(),
+        pg_config
+            .test_port()
+            .expect("unable to determine test port")
+            .to_string(),
+        "-h".into(),
+        pg_config.host().into(),
+        "-c".into(),
+        "log_destination=stderr".into(),
+        "-c".into(),
+        "logging_collector=off".into(),
+    ];
+
+    let mut command = if let Some(runas) = get_runas() {
+        #[inline]
+        fn accept_envar(var: &str) -> bool {
+            // taken from https://doc.rust-lang.org/cargo/reference/environment-variables.html
+            var.starts_with("CARGO")
+                || var.starts_with("RUST")
+                || var.starts_with("DEP_")
+                || [
+                    "OUT_DIR",
+                    "TARGET",
+                    "HOST",
+                    "NUM_JOBS",
+                    "OPT_LEVEL",
+                    "DEBUG",
+                    "PROFILE",
+                ]
+                .contains(&var)
+        }
+        let mut cmd = sudo_command(runas);
+        // when running the `postmaster` process via `sudo`, we need to copy the cargo/rust-related
+        // environment variables and pass as arguments to sudo, ahead of the `postmaster` command itself
+        //
+        // This ensures that in-process #[pg_test]s will see the `CARGO_xxx` envars they expect
+        for (var, value) in std::env::vars() {
+            if accept_envar(&var) {
+                let env_as_arg = format!("{var}={}", shlex::try_quote(&value)?);
+                cmd.arg(env_as_arg);
+            }
+        }
+        // now we can add the `pg_ctl` as the command for `sudo` to execute
+        cmd.arg(pg_ctl);
         cmd
     } else {
-        Command::new(postmaster_path)
+        Command::new(pg_ctl)
     };
     command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .arg("start")
+        .arg("-o")
+        .arg(postmaster_args.join(" "))
         .arg("-D")
         .arg(get_pgdata_path()?.to_str().unwrap())
-        .arg("-h")
-        .arg(pg_config.host())
-        .arg("-p")
-        .arg(
-            pg_config
-                .test_port()
-                .expect("unable to determine test port")
-                .to_string(),
-        )
-        // Redirecting logs to files can hang the test framework, override it
-        .args([
-            "-c",
-            "log_destination=stderr",
-            "-c",
-            "logging_collector=off",
-        ])
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::piped());
+        .arg("-l")
+        .arg(pipe.path());
+    if let Some(postmaster_path) = postmaster_path.as_ref() {
+        command
+            .arg("-W") // pg_ctl cannot detect if postmaster starts
+            .arg("-p")
+            .arg(postmaster_path);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // on windows, created pipes are leaked, so that the command hangs
+        command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+    }
 
     let command_str = format!("{command:?}");
 
-    // start Postgres and monitor its stderr in the background
-    // also notify the main thread when it's ready to accept connections
-    let session_id = monitor_pg(command, command_str, loglines);
+    #[cfg(target_family = "unix")]
+    let (output, mut pipe) = {
+        let output = command.output();
+        let pipe = pipe.read().expect("failed to connect to pipe");
+        drop(make_pipe_opened_without_blocking);
+        (output?, pipe)
+    };
+    #[cfg(target_os = "windows")]
+    let (output, mut pipe) = {
+        let (output, pipe) = std::thread::scope(|scope| {
+            let thread = scope.spawn(|| {
+                pipe.connect().expect("failed to connect to pg_ctl");
+                pipe.connect().expect("failed to connect to pipe")
+            });
+            (command.output(), thread.join().unwrap())
+        });
+        (output?, pipe)
+    };
 
-    Ok(session_id)
+    if !output.status.success() {
+        let log = {
+            use std::io::Read;
+            let mut buffer = vec![0u8; 4096];
+            let mut result = Vec::new();
+            if let Ok(n) = pipe.read(&mut buffer) {
+                if n > 0 {
+                    result.extend(&buffer[..n]);
+                }
+            }
+            result
+        };
+        panic!(
+            "problem running pg_ctl: {}\n\n{}\n\n{}",
+            command_str,
+            String::from_utf8(output.stderr).unwrap(),
+            String::from_utf8(log).unwrap()
+        );
+    }
+
+    add_shutdown_hook(|| {
+        let pg_config = get_pg_config().unwrap();
+        let pg_ctl = pg_config.pg_ctl_path().unwrap();
+
+        let mut command = if let Some(runas) = get_runas() {
+            let mut cmd = sudo_command(runas);
+            cmd.arg(pg_ctl);
+            cmd
+        } else {
+            Command::new(pg_ctl)
+        };
+        command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .arg("stop")
+            .arg("-D")
+            .arg(get_pgdata_path().unwrap().to_str().unwrap())
+            .arg("-m")
+            .arg("fast");
+        let command_str = format!("{command:?}");
+        let output = command.output().unwrap();
+        if !output.status.success() {
+            panic!(
+                "problem running pg_ctl: {}\n\n{}",
+                command_str,
+                String::from_utf8(output.stderr).unwrap()
+            );
+        }
+    });
+
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let reader = BufReader::new(pipe);
+        let regex = regex::Regex::new(r"\[.*?\] \[.*?\] \[(?P<session_id>.*?)\]").unwrap();
+        let mut is_started_yet = false;
+        let mut lines = reader.lines();
+        while let Some(Ok(line)) = lines.next() {
+            let session_id = get_named_capture(&regex, "session_id", &line)
+                .unwrap_or_else(|| "NONE".to_string());
+
+            if line.contains("database system is ready to accept connections") {
+                // Postgres says it's ready to go
+                if sender.send(session_id.clone()).is_err() {
+                    // The channel is closed.  This is really early in the startup process
+                    // and likely indicates that a test crashed Postgres
+                    panic!("{}: `monitor_pg()`:  failed to send back session_id `{session_id}`.  Did Postgres crash?", "ERROR".red().bold());
+                }
+                is_started_yet = true;
+            }
+
+            if !is_started_yet || line.contains("TMSG: ") {
+                eprintln!("{}", line.cyan());
+            }
+
+            // if line.contains("INFO: ") {
+            //     eprintln!("{}", line.cyan());
+            // } else if line.contains("WARNING: ") {
+            //     eprintln!("{}", line.bold().yellow());
+            // } else if line.contains("ERROR: ") {
+            //     eprintln!("{}", line.bold().red());
+            // } else if line.contains("statement: ") || line.contains("duration: ") {
+            //     eprintln!("{}", line.bold().blue());
+            // } else if line.contains("LOG: ") {
+            //     eprintln!("{}", line.dimmed().white());
+            // } else {
+            //     eprintln!("{}", line.bold().purple());
+            // }
+
+            let mut loglines = loglines.lock().unwrap();
+            let session_lines = loglines.entry(session_id).or_default();
+            session_lines.push(line);
+        }
+    });
+
+    // wait for Postgres to indicate it's ready to accept connection
+    // and return its pid when it is
+    Ok(receiver.recv().expect("Postgres failed to start"))
 }
 
 fn valgrind_suppressions_path(pg_config: &PgConfig) -> Result<PathBuf, eyre::Report> {
@@ -588,122 +841,37 @@ fn wait_for_pidfile() -> Result<(), eyre::Report> {
     Ok(())
 }
 
-fn monitor_pg(mut command: Command, cmd_string: String, loglines: LogLines) -> String {
-    let (sender, receiver) = std::sync::mpsc::channel();
-
-    std::thread::spawn(move || {
-        let mut child = command.spawn().expect("postmaster didn't spawn");
-
-        let pid = child.id();
-        // Add a shutdown hook so we can terminate it when the test framework
-        // exits. TODO: Consider finding a way to handle cases where we fail to
-        // clean up due to a SIGNAL?
-        add_shutdown_hook(move || unsafe {
-            libc::kill(pid as libc::pid_t, libc::SIGTERM);
-            let message_string = std::ffi::CString::new(
-                format!("stopping postgres (pid={pid})\n")
-                    .bold()
-                    .blue()
-                    .to_string(),
-            )
-            .unwrap();
-            // IMPORTANT: Rust string literals are not naturally null-terminated
-            libc::printf("%s\0".as_ptr().cast(), message_string.as_ptr());
-        });
-
-        eprintln!(
-            "{cmd}\npid={p}",
-            cmd = cmd_string.bold().blue(),
-            p = pid.to_string().yellow()
-        );
-        eprintln!("{}", pg_sys::get_pg_version_string().bold().purple());
-
-        // wait for the database to say its ready to start up
-        let reader = BufReader::new(
-            child
-                .stderr
-                .take()
-                .expect("couldn't take postmaster stderr"),
-        );
-
-        let regex = regex::Regex::new(r#"\[.*?\] \[.*?\] \[(?P<session_id>.*?)\]"#).unwrap();
-        let mut is_started_yet = false;
-        let mut lines = reader.lines();
-        while let Some(Ok(line)) = lines.next() {
-            let session_id = match get_named_capture(&regex, "session_id", &line) {
-                Some(sid) => sid,
-                None => "NONE".to_string(),
-            };
-
-            if line.contains("database system is ready to accept connections") {
-                // Postgres says it's ready to go
-                sender.send(session_id.clone()).unwrap();
-                is_started_yet = true;
-            }
-
-            if !is_started_yet || line.contains("TMSG: ") {
-                eprintln!("{}", line.cyan());
-            }
-
-            // if line.contains("INFO: ") {
-            //     eprintln!("{}", line.cyan());
-            // } else if line.contains("WARNING: ") {
-            //     eprintln!("{}", line.bold().yellow());
-            // } else if line.contains("ERROR: ") {
-            //     eprintln!("{}", line.bold().red());
-            // } else if line.contains("statement: ") || line.contains("duration: ") {
-            //     eprintln!("{}", line.bold().blue());
-            // } else if line.contains("LOG: ") {
-            //     eprintln!("{}", line.dimmed().white());
-            // } else {
-            //     eprintln!("{}", line.bold().purple());
-            // }
-
-            let mut loglines = loglines.lock().unwrap();
-            let session_lines = loglines.entry(session_id).or_insert_with(Vec::new);
-            session_lines.push(line);
-        }
-
-        // wait for Postgres to really finish
-        match child.try_wait() {
-            Ok(status) => {
-                if let Some(_status) = status {
-                    // we exited normally
-                }
-            }
-            Err(e) => panic!("was going to let Postgres finish, but errored this time:\n{e}"),
-        }
-    });
-
-    // wait for Postgres to indicate it's ready to accept connection
-    // and return its pid when it is
-    receiver.recv().expect("Postgres failed to start")
-}
-
 fn dropdb() -> eyre::Result<()> {
     let pg_config = get_pg_config()?;
-    let output = Command::new(
-        pg_config
-            .dropdb_path()
-            .expect("unable to determine dropdb path"),
-    )
-    .env_remove("PGDATABASE")
-    .env_remove("PGHOST")
-    .env_remove("PGPORT")
-    .env_remove("PGUSER")
-    .arg("--if-exists")
-    .arg("-h")
-    .arg(pg_config.host())
-    .arg("-p")
-    .arg(
-        pg_config
-            .test_port()
-            .expect("unable to determine test port")
-            .to_string(),
-    )
-    .arg(get_pg_dbname())
-    .output()
-    .unwrap();
+    let dropdb_path = pg_config
+        .dropdb_path()
+        .expect("unable to determine dropdb path");
+    let mut command = if let Some(runas) = get_runas() {
+        let mut cmd = sudo_command(runas);
+        cmd.arg(dropdb_path);
+        cmd
+    } else {
+        Command::new(dropdb_path)
+    };
+
+    let output = command
+        .env_remove("PGDATABASE")
+        .env_remove("PGHOST")
+        .env_remove("PGPORT")
+        .env_remove("PGUSER")
+        .arg("--if-exists")
+        .arg("-h")
+        .arg(pg_config.host())
+        .arg("-p")
+        .arg(
+            pg_config
+                .test_port()
+                .expect("unable to determine test port")
+                .to_string(),
+        )
+        .arg(get_pg_dbname())
+        .output()
+        .unwrap();
 
     if !output.status.success() {
         // maybe the database didn't exist, and if so that's okay
@@ -728,13 +896,12 @@ fn create_extension() -> eyre::Result<()> {
     let extension_name = get_extension_name()?;
 
     query_wrapper(
-        Some(format!("CREATE EXTENSION {} CASCADE;", &extension_name)),
+        Some(format!("CREATE EXTENSION {extension_name} CASCADE;")),
         None,
         |query, _| client.simple_query(query.unwrap().as_str()),
     )
     .wrap_err(format!(
-        "There was an issue creating the extension '{}' in Postgres: ",
-        &extension_name
+        "There was an issue creating the extension '{extension_name}' in Postgres: "
     ))?;
 
     Ok(())
@@ -756,31 +923,47 @@ fn get_extension_name() -> eyre::Result<String> {
     // https://github.com/rust-lang/cargo/issues/45
     let path = PathBuf::from(dir).join("Cargo.toml");
     let name = pgrx_pg_config::cargo::read_manifest(path)?.lib_name()?;
-    Ok(name.replace("-", "_"))
+    Ok(name.replace('-', "_"))
 }
 
 fn get_pgdata_path() -> eyre::Result<PathBuf> {
-    let mut target_dir = get_target_dir()?;
-    target_dir.push(&format!(
-        "pgrx-test-data-{}",
-        pg_sys::get_pg_major_version_num()
-    ));
-    Ok(target_dir)
+    // Note that this path is turned into an entry in the unix_socket_directories config.
+    // Each path has a low limit in maximum bytes, so we should avoid adding needless characters.
+    let mut pgdata_base = std::env::var("CARGO_PGRX_TEST_PGDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let mut target_dir = get_target_dir()
+                .unwrap_or_else(|e| panic!("Failed to determine the crate target directory: {e}"));
+            // ./test-data or ./pgdata both seem too cryptic
+            target_dir.push("test-pgdata");
+            target_dir
+        });
+
+    // append the postgres version number
+    pgdata_base.push(format!("{}", pg_sys::get_pg_major_version_num()));
+    Ok(pgdata_base)
 }
 
 fn get_pid_file() -> eyre::Result<PathBuf> {
     let mut pgdata = get_pgdata_path()?;
     pgdata.push("postmaster.pid");
-    return Ok(pgdata);
+    Ok(pgdata)
 }
 
+#[inline]
 pub(crate) fn get_pg_dbname() -> &'static str {
     "pgrx_tests"
 }
 
 pub(crate) fn get_pg_user() -> String {
-    std::env::var("USER")
-        .unwrap_or_else(|_| panic!("USER environment var is unset or invalid UTF-8"))
+    #[cfg(target_family = "unix")]
+    let varname = "USER";
+    #[cfg(target_os = "windows")]
+    let varname = "USERNAME";
+    get_runas().unwrap_or_else(|| {
+        std::env::var(varname)
+            .unwrap_or_else(|_| panic!("USER environment var is unset or invalid UTF-8"))
+    })
 }
 
 #[inline]
@@ -799,11 +982,17 @@ fn get_runas() -> Option<String> {
     }
 }
 
-fn get_named_capture(regex: &regex::Regex, name: &'static str, against: &str) -> Option<String> {
-    match regex.captures(against) {
-        Some(cap) => Some(cap[name].to_string()),
-        None => None,
-    }
+#[inline]
+fn requires_runas() -> bool {
+    get_runas().is_some()
+}
+
+pub fn get_named_capture(
+    regex: &regex::Regex,
+    name: &'static str,
+    against: &str,
+) -> Option<String> {
+    regex.captures(against).map(|cap| cap[name].to_string())
 }
 
 fn get_cargo_test_features() -> eyre::Result<clap_cargo::Features> {
@@ -815,8 +1004,7 @@ fn get_cargo_test_features() -> eyre::Result<clap_cargo::Features> {
             "--no-default-features" => features.no_default_features = true,
             "--features" => {
                 let configured_features = iter.next().ok_or(eyre!(
-                    "no `--features` specified in the cargo argument list: {:?}",
-                    cargo_user_args
+                    "no `--features` specified in the cargo argument list: {cargo_user_args:?}"
                 ))?;
                 features.features = configured_features
                     .split(|c: char| c.is_ascii_whitespace() || c == ',')
@@ -851,13 +1039,20 @@ fn get_cargo_args() -> Vec<String> {
     while let Some(process) = system.process(pid) {
         // only if it's "cargo"... (This works for now, but just because `cargo`
         // is at the end of the path. How *should* this handle `CARGO`?)
-        if process.exe().is_some_and(|p| p.ends_with("cargo")) {
+        if process
+            .exe()
+            .is_some_and(|p| p.ends_with("cargo") || p.ends_with("cargo.exe"))
+        {
             // ... and only if it's "cargo test"...
             if process.cmd().iter().any(|arg| arg == "test")
                 && !process.cmd().iter().any(|arg| arg == "pgrx")
             {
                 // ... do we want its args
-                return process.cmd().iter().cloned().collect();
+                return process
+                    .cmd()
+                    .iter()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .collect();
             }
         }
 
@@ -873,7 +1068,7 @@ fn get_cargo_args() -> Vec<String> {
 
 // TODO: this would be a good place to insert a check invoking to see if
 // `cargo-pgrx` is a crate in the local workspace, and use it instead.
-fn cargo_pgrx() -> std::process::Command {
+fn cargo_pgrx() -> Command {
     fn var_path(s: &str) -> Option<PathBuf> {
         std::env::var_os(s).map(PathBuf::from)
     }
@@ -883,7 +1078,7 @@ fn cargo_pgrx() -> std::process::Command {
         .or_else(|| find_on_path("cargo-pgrx"))
         .or_else(|| var_path("CARGO"))
         .unwrap_or_else(|| "cargo".into());
-    let mut cmd = std::process::Command::new(cargo_pgrx);
+    let mut cmd = Command::new(cargo_pgrx);
     cmd.arg("pgrx");
     cmd
 }
@@ -899,5 +1094,245 @@ fn find_on_path(program: &str) -> Option<PathBuf> {
 }
 
 fn use_valgrind() -> bool {
-    std::env::var_os("USE_VALGRIND").is_some_and(|s| s.len() > 0)
+    std::env::var_os("USE_VALGRIND").is_some_and(|s| !s.is_empty())
+}
+
+/// Create a [`Command`] pre-configured to what the caller decides using `sudo`
+fn sudo_command<U: AsRef<OsStr>>(user: U) -> Command {
+    let mut sudo = Command::new("sudo");
+    sudo.arg("-u");
+    sudo.arg(user);
+    sudo
+}
+
+pub mod pipe {
+    use rand::distr::Alphanumeric;
+    use rand::Rng;
+    use std::fs::File;
+    use std::io::Error;
+    use std::path::{Path, PathBuf};
+
+    #[cfg(target_family = "unix")]
+    pub struct UnixFifo {
+        path: PathBuf,
+    }
+
+    #[cfg(target_family = "unix")]
+    impl UnixFifo {
+        pub fn create() -> std::io::Result<Self> {
+            use std::ffi::CString;
+            let filename: String = rand::rng()
+                .sample_iter(Alphanumeric)
+                .map(char::from)
+                .take(6)
+                .collect();
+            let path = format!(r"/tmp/{filename}");
+            let arg = CString::new(path.clone()).unwrap();
+            let mode = libc::S_IRUSR
+                | libc::S_IWUSR
+                | libc::S_IRGRP
+                | libc::S_IWGRP
+                | libc::S_IROTH
+                | libc::S_IWOTH;
+            let errno = unsafe { libc::mkfifo(arg.as_ptr(), mode) };
+            if errno < 0 {
+                return Err(Error::last_os_error());
+            }
+            let errno = unsafe { libc::chmod(arg.as_ptr(), mode) };
+            if errno < 0 {
+                return Err(Error::last_os_error());
+            }
+            Ok(UnixFifo {
+                path: PathBuf::from(path),
+            })
+        }
+        pub fn path(&self) -> &Path {
+            &self.path
+        }
+        pub fn read(&self) -> std::io::Result<File> {
+            use std::os::unix::fs::OpenOptionsExt;
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOCTTY)
+                .open(&self.path)?;
+            Ok(file)
+        }
+        pub fn full(&self) -> std::io::Result<File> {
+            use std::os::unix::fs::OpenOptionsExt;
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .custom_flags(libc::O_NOCTTY)
+                .open(&self.path)?;
+            Ok(file)
+        }
+    }
+
+    #[cfg(target_family = "unix")]
+    impl Drop for UnixFifo {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    pub struct WindowsNamedPipe {
+        path: PathBuf,
+        file: File,
+    }
+
+    #[cfg(target_os = "windows")]
+    impl WindowsNamedPipe {
+        pub fn create() -> std::io::Result<Self> {
+            let filename: String = rand::thread_rng()
+                .sample_iter(Alphanumeric)
+                .map(char::from)
+                .take(6)
+                .collect();
+            let path = format!(r"\\.\pipe\{filename}");
+            let server = unsafe {
+                use std::os::windows::ffi::OsStrExt;
+                use std::os::windows::io::FromRawHandle;
+                let mut os_str = PathBuf::from(&path).as_os_str().to_os_string();
+                os_str.push("\0");
+                let arg = os_str.encode_wide().collect::<Vec<u16>>();
+                let mut sd = {
+                    let mut sd = std::mem::zeroed::<winapi::um::winnt::SECURITY_DESCRIPTOR>();
+                    let success = winapi::um::securitybaseapi::InitializeSecurityDescriptor(
+                        (&raw mut sd).cast(),
+                        winapi::um::winnt::SECURITY_DESCRIPTOR_REVISION,
+                    );
+                    if success == 0 {
+                        return Err(Error::last_os_error());
+                    }
+                    let success = winapi::um::securitybaseapi::SetSecurityDescriptorDacl(
+                        (&raw mut sd).cast(),
+                        1,
+                        std::ptr::null_mut(),
+                        0,
+                    );
+                    if success == 0 {
+                        return Err(Error::last_os_error());
+                    }
+                    let success = winapi::um::securitybaseapi::SetSecurityDescriptorControl(
+                        (&raw mut sd).cast(),
+                        winapi::um::winnt::SE_DACL_PROTECTED,
+                        winapi::um::winnt::SE_DACL_PROTECTED,
+                    );
+                    if success == 0 {
+                        return Err(Error::last_os_error());
+                    }
+                    sd
+                };
+                let mut sa = {
+                    let mut sa = std::mem::zeroed::<winapi::um::minwinbase::SECURITY_ATTRIBUTES>();
+                    sa.nLength = size_of::<winapi::um::minwinbase::SECURITY_ATTRIBUTES>() as _;
+                    sa.lpSecurityDescriptor = (&raw mut sd).cast();
+                    sa.bInheritHandle = 0;
+                    sa
+                };
+                let raw_handle = winapi::um::namedpipeapi::CreateNamedPipeW(
+                    arg.as_ptr().cast(),
+                    winapi::um::winbase::PIPE_ACCESS_DUPLEX
+                        | winapi::um::winbase::FILE_FLAG_FIRST_PIPE_INSTANCE,
+                    winapi::um::winbase::PIPE_TYPE_BYTE
+                        | winapi::um::winbase::PIPE_READMODE_BYTE
+                        | winapi::um::winbase::PIPE_WAIT,
+                    winapi::um::winbase::PIPE_UNLIMITED_INSTANCES,
+                    65536,
+                    65536,
+                    0,
+                    &raw mut sa,
+                );
+                if raw_handle == winapi::um::handleapi::INVALID_HANDLE_VALUE {
+                    return Err(Error::last_os_error());
+                }
+                File::from_raw_handle(raw_handle.cast())
+            };
+            Ok(WindowsNamedPipe {
+                path: PathBuf::from(path),
+                file: server,
+            })
+        }
+        pub fn path(&self) -> &Path {
+            &self.path
+        }
+        pub fn connect(&mut self) -> std::io::Result<File> {
+            use std::os::windows::io::AsRawHandle;
+            let ret = unsafe {
+                winapi::um::namedpipeapi::ConnectNamedPipe(
+                    self.file.as_raw_handle().cast(),
+                    std::ptr::null_mut(),
+                )
+            };
+            if ret == 0 {
+                let last_os_error = Error::last_os_error();
+                if last_os_error.raw_os_error()
+                    != Some(winapi::shared::winerror::ERROR_PIPE_CONNECTED as _)
+                {
+                    return Err(last_os_error);
+                }
+            }
+            let path = &self.path;
+            let server = unsafe {
+                use std::os::windows::ffi::OsStrExt;
+                use std::os::windows::io::FromRawHandle;
+                let mut os_str = PathBuf::from(&path).as_os_str().to_os_string();
+                os_str.push("\0");
+                let arg = os_str.encode_wide().collect::<Vec<u16>>();
+                let mut sd = {
+                    let mut sd = std::mem::zeroed::<winapi::um::winnt::SECURITY_DESCRIPTOR>();
+                    let success = winapi::um::securitybaseapi::InitializeSecurityDescriptor(
+                        (&raw mut sd).cast(),
+                        winapi::um::winnt::SECURITY_DESCRIPTOR_REVISION,
+                    );
+                    if success == 0 {
+                        return Err(Error::last_os_error());
+                    }
+                    let success = winapi::um::securitybaseapi::SetSecurityDescriptorDacl(
+                        (&raw mut sd).cast(),
+                        1,
+                        std::ptr::null_mut(),
+                        0,
+                    );
+                    if success == 0 {
+                        return Err(Error::last_os_error());
+                    }
+                    let success = winapi::um::securitybaseapi::SetSecurityDescriptorControl(
+                        (&raw mut sd).cast(),
+                        winapi::um::winnt::SE_DACL_PROTECTED,
+                        winapi::um::winnt::SE_DACL_PROTECTED,
+                    );
+                    if success == 0 {
+                        return Err(Error::last_os_error());
+                    }
+                    sd
+                };
+                let mut sa = {
+                    let mut sa = std::mem::zeroed::<winapi::um::minwinbase::SECURITY_ATTRIBUTES>();
+                    sa.nLength = size_of::<winapi::um::minwinbase::SECURITY_ATTRIBUTES>() as _;
+                    sa.lpSecurityDescriptor = (&raw mut sd).cast();
+                    sa.bInheritHandle = 0;
+                    sa
+                };
+                let raw_handle = winapi::um::namedpipeapi::CreateNamedPipeW(
+                    arg.as_ptr().cast(),
+                    winapi::um::winbase::PIPE_ACCESS_DUPLEX,
+                    winapi::um::winbase::PIPE_TYPE_BYTE
+                        | winapi::um::winbase::PIPE_READMODE_BYTE
+                        | winapi::um::winbase::PIPE_WAIT,
+                    winapi::um::winbase::PIPE_UNLIMITED_INSTANCES,
+                    65536,
+                    65536,
+                    0,
+                    &raw mut sa,
+                );
+                if raw_handle == winapi::um::handleapi::INVALID_HANDLE_VALUE {
+                    return Err(Error::last_os_error());
+                }
+                File::from_raw_handle(raw_handle.cast())
+            };
+            Ok(std::mem::replace(&mut self.file, server))
+        }
+    }
 }

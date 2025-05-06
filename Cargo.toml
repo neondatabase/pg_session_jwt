@@ -26,7 +26,7 @@ base64ct = { version = "1.6.0", features = ["std"] }
 heapless = { version = "0.8.0", features = ["serde"] }
 jose-jwk = { version = "0.1.2", default-features = false }
 ed25519-dalek = { version = "2", default-features = false }
-pgrx = "0.12.6"
+pgrx = "0.14.1"
 serde = { version = "1.0.203", features = ["derive"], default-features = false }
 serde_json = { version = "1.0.117", default-features = false }
 
