@@ -40,6 +40,8 @@ pub mod auth {
 
     type Object = serde_json::Map<String, serde_json::Value>;
 
+    /// local-proxy/auth-broker use a leeway of 30s. We add a little
+    /// bit more leeway here to account for any delays before getting to the extension.
     const CLOCK_SKEW_LEEWAY: Duration = Duration::from_secs(60);
 
     /// A octet key pair CFRG-curve key, as defined in [RFC 8037]
