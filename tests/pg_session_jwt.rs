@@ -25,6 +25,7 @@ fn main() -> ExitCode {
     tests.push(test_fn("invalid_exp", Some(err), invalid_exp));
 
     tests.push(test_fn("valid_time", None, valid_time));
+    tests.push(test_fn("valid_time_leeway", None, valid_time_leeway));
     tests.push(test_fn("test_pg_session_jwt", None, test_pg_session_jwt));
     tests.push(test_fn("test_bgworker", None, test_bgworker));
     tests.push(test_fn(
@@ -102,7 +103,7 @@ fn invalid_nbf(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postgre
         .unwrap()
         .as_secs();
 
-    let jwt = sign_jwt(sk, r#"{"kid":1}"#, json!({"jti": 1, "nbf": now + 10}));
+    let jwt = sign_jwt(sk, r#"{"kid":1}"#, json!({"jti": 1, "nbf": now + 70}));
 
     tx.execute("select auth.init()", &[])?;
     tx.execute("select auth.jwt_session_init($1)", &[&jwt])?;
@@ -119,7 +120,7 @@ fn invalid_exp(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postgre
     let jwt = sign_jwt(
         sk,
         r#"{"kid":1}"#,
-        json!({"jti": 1,  "nbf": now - 10, "exp": now - 5}),
+        json!({"jti": 1,  "nbf": now - 70, "exp": now - 65}),
     );
 
     tx.execute("select auth.init()", &[])?;
@@ -147,6 +148,23 @@ fn valid_time(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postgres
     tx.execute("select auth.jwt_session_init($1)", &[&jwt1])?;
     tx.execute("select auth.jwt_session_init($1)", &[&jwt2])?;
     tx.execute("select auth.jwt_session_init($1)", &[&jwt3])?;
+
+    Ok(())
+}
+
+fn valid_time_leeway(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postgres::Error> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let header = r#"{"kid":1}"#;
+    let jwt1 = sign_jwt(sk, header, json!({"jti": 1, "nbf": now + 59}));
+    let jwt2 = sign_jwt(sk, header, json!({"jti": 2, "exp": now - 59}));
+
+    tx.execute("select auth.init()", &[])?;
+    tx.execute("select auth.jwt_session_init($1)", &[&jwt1])?;
+    tx.execute("select auth.jwt_session_init($1)", &[&jwt2])?;
 
     Ok(())
 }

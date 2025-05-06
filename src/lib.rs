@@ -24,6 +24,7 @@ pub unsafe extern "C" fn _PG_init() {
 #[pg_schema]
 pub mod auth {
     use std::cell::{OnceCell, RefCell};
+    use std::time::Duration;
 
     use pgrx::prelude::*;
     use pgrx::JsonB;
@@ -169,8 +170,6 @@ pub mod auth {
                 )
             });
 
-        let leeway = AnyNumeric::from(CLOCK_SKEW_LEEWAY.as_secs());
-
         if let Some(nbf) = payload.get("nbf") {
             let nbf = nbf.as_i64().unwrap_or_else(|| {
                 error_code!(
@@ -178,12 +177,14 @@ pub mod auth {
                     "'nbf' (Not Before) must be an integer representing seconds since unix epoch",
                 )
             });
-            let nbf = AnyNumeric::from(nbf);
+            let nbf_num = AnyNumeric::from(nbf);
 
-            if now + leeway < nbf {
+            let leeway = AnyNumeric::from(CLOCK_SKEW_LEEWAY.as_secs());
+            if now.clone() + leeway < nbf_num {
                 error_code!(
                     PgSqlErrorCode::ERRCODE_CHECK_VIOLATION,
                     "Token used before it is ready",
+                    format!("nbf={nbf}")
                 )
             }
         }
@@ -194,12 +195,14 @@ pub mod auth {
                     "'exp' (Expiration) must be an integer representing seconds since unix epoch",
                 )
             });
-            let exp = AnyNumeric::from(exp);
+            let exp_num = AnyNumeric::from(exp);
 
-            if exp + leeway < now {
+            let leeway = AnyNumeric::from(CLOCK_SKEW_LEEWAY.as_secs());
+            if exp_num + leeway < now {
                 error_code!(
                     PgSqlErrorCode::ERRCODE_CHECK_VIOLATION,
                     "Token used after it has expired",
+                    format!("exp={exp}")
                 )
             }
         }
