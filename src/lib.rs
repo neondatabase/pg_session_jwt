@@ -44,7 +44,7 @@ pub mod auth {
 
     /// local-proxy/auth-broker use a leeway of 30s. We add a little
     /// bit more leeway here to account for any delays before getting to the extension.
-    const CLOCK_SKEW_LEEWAY: Duration = Duration::from_secs(60);
+    pub const CLOCK_SKEW_LEEWAY: Duration = Duration::from_secs(60);
 
     /// A octet key pair CFRG-curve key, as defined in [RFC 8037]
     ///
@@ -285,7 +285,7 @@ pub mod auth {
     }
 
     fn can_log_audit() -> bool {
-        let log_var = NEON_AUTH_ENABLE_AUDIT_LOG.get().map(|x| x.as_bytes());
+        let log_var = NEON_AUTH_ENABLE_AUDIT_LOG.get().map(|x| x.to_bytes());
         matches!(log_var, Some(b"on"))
     }
 
