@@ -17,7 +17,7 @@ macro_rules! error_code {
 
 #[allow(non_snake_case)]
 #[pg_guard]
-pub unsafe extern "C" fn _PG_init() {
+pub unsafe extern "C-unwind" fn _PG_init() {
     gucs::init();
 }
 
