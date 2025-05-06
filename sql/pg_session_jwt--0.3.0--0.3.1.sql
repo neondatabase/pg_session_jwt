@@ -1,2 +1,3 @@
 -- no migration necessary.
 -- adds 60s leeway to expiration validation
+-- audit logs are enabled for pg_session_jwt.audit_log=on

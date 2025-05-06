@@ -36,14 +36,15 @@ pub mod auth {
     use serde::de::DeserializeOwned;
 
     use crate::gucs::{
-        NEON_AUTH_JWK, NEON_AUTH_JWK_RUNTIME_PARAM, NEON_AUTH_JWT, NEON_AUTH_JWT_RUNTIME_PARAM,
+        NEON_AUTH_ENABLE_AUDIT_LOG, NEON_AUTH_JWK, NEON_AUTH_JWK_RUNTIME_PARAM, NEON_AUTH_JWT,
+        NEON_AUTH_JWT_RUNTIME_PARAM, POSTGREST_JWT, POSTGREST_JWT_RUNTIME_PARAM,
     };
 
     type Object = serde_json::Map<String, serde_json::Value>;
 
     /// local-proxy/auth-broker use a leeway of 30s. We add a little
     /// bit more leeway here to account for any delays before getting to the extension.
-    const CLOCK_SKEW_LEEWAY: Duration = Duration::from_secs(60);
+    pub const CLOCK_SKEW_LEEWAY: Duration = Duration::from_secs(60);
 
     /// A octet key pair CFRG-curve key, as defined in [RFC 8037]
     ///
@@ -283,7 +284,16 @@ pub mod auth {
         })
     }
 
+    fn can_log_audit() -> bool {
+        let log_var = NEON_AUTH_ENABLE_AUDIT_LOG.get().map(|x| x.to_bytes());
+        matches!(log_var, Some(b"on"))
+    }
+
     fn log_audit_validated_jwt(payload: &Object) {
+        if !can_log_audit() {
+            return;
+        }
+
         log!(
             "JWT issued for sub={} and aud={} was succesfully validated",
             payload.get("sub").unwrap_or(&"".into()),
@@ -291,25 +301,30 @@ pub mod auth {
         );
     }
 
-    fn log_audit_guc_claims(claims: Option<&Object>) {
+    fn log_audit_guc_claims(guc: &str, claims: Option<&Object>) {
+        if !can_log_audit() {
+            return;
+        }
+
         match claims {
             Some(payload) => log!(
-                "JWT claims from GUC variable: sub={} and aud={}",
+                "JWT claims from GUC '{}': sub={} and aud={}",
+                guc,
                 payload.get("sub").unwrap_or(&"".into()),
                 payload.get("aud").unwrap_or(&"".into())
             ),
-            None => log!("No JWT claims found in GUC variable"),
+            None => log!("No JWT claims found in GUC variable: {}", guc),
         }
     }
 
     fn get_claims_from_guc() -> Option<serde_json::Value> {
-        let claims: Option<serde_json::Value> = Spi::get_one::<String>("SELECT current_setting('request.jwt.claims', true)")
-            .ok()
-            .flatten()
-            .filter(|s| !s.is_empty())
-            .and_then(|claims| serde_json::from_str(&claims).ok());
-        
-        log_audit_guc_claims(claims.as_ref().and_then(|v| v.as_object()));
+        let claims: Option<serde_json::Value> =
+            serde_json::from_str(POSTGREST_JWT.get()?.to_str().unwrap_or("")).ok();
+
+        log_audit_guc_claims(
+            POSTGREST_JWT_RUNTIME_PARAM,
+            claims.as_ref().and_then(|v| v.as_object()),
+        );
         claims
     }
 

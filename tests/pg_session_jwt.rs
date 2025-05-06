@@ -8,6 +8,8 @@ use libtest_mimic::{run, Trial};
 use rand::rngs::OsRng;
 use serde_json::json;
 
+use pg_session_jwt::auth::CLOCK_SKEW_LEEWAY;
+
 fn main() -> ExitCode {
     let mut args = libtest_mimic::Arguments::from_args();
     // fixes concurrent update failures
@@ -102,8 +104,9 @@ fn invalid_nbf(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postgre
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
+    let nbf_leeway = CLOCK_SKEW_LEEWAY.as_secs() + 10;
 
-    let jwt = sign_jwt(sk, r#"{"kid":1}"#, json!({"jti": 1, "nbf": now + 70}));
+    let jwt = sign_jwt(sk, r#"{"kid":1}"#, json!({"jti": 1, "nbf": now + nbf_leeway}));
 
     tx.execute("select auth.init()", &[])?;
     tx.execute("select auth.jwt_session_init($1)", &[&jwt])?;
@@ -116,11 +119,12 @@ fn invalid_exp(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postgre
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
+    let exp_leeway = CLOCK_SKEW_LEEWAY.as_secs() + 5;
 
     let jwt = sign_jwt(
         sk,
         r#"{"kid":1}"#,
-        json!({"jti": 1,  "nbf": now - 70, "exp": now - 65}),
+        json!({"jti": 1,  "exp": now - exp_leeway}),
     );
 
     tx.execute("select auth.init()", &[])?;
@@ -157,10 +161,12 @@ fn valid_time_leeway(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), p
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
+    let nbf_leeway = CLOCK_SKEW_LEEWAY.as_secs() - 1;
+    let exp_leeway = CLOCK_SKEW_LEEWAY.as_secs() - 1;
 
     let header = r#"{"kid":1}"#;
-    let jwt1 = sign_jwt(sk, header, json!({"jti": 1, "nbf": now + 59}));
-    let jwt2 = sign_jwt(sk, header, json!({"jti": 2, "exp": now - 59}));
+    let jwt1 = sign_jwt(sk, header, json!({"jti": 1, "nbf": now + nbf_leeway}));
+    let jwt2 = sign_jwt(sk, header, json!({"jti": 2, "exp": now - exp_leeway}));
 
     tx.execute("select auth.init()", &[])?;
     tx.execute("select auth.jwt_session_init($1)", &[&jwt1])?;
