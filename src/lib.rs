@@ -178,12 +178,12 @@ pub mod auth {
                     "'nbf' (Not Before) must be an integer representing seconds since unix epoch",
                 )
             });
-            let nbf = AnyNumeric::from(nbf);
+            let nbf_num = AnyNumeric::from(nbf);
 
-            if now + leeway < nbf {
+            if now + leeway < nbf_num {
                 error_code!(
                     PgSqlErrorCode::ERRCODE_CHECK_VIOLATION,
-                    "Token used before it is ready",
+                    "Token used before it is ready (nbf={nbf})",
                 )
             }
         }
@@ -194,12 +194,12 @@ pub mod auth {
                     "'exp' (Expiration) must be an integer representing seconds since unix epoch",
                 )
             });
-            let exp = AnyNumeric::from(exp);
+            let exp_num = AnyNumeric::from(exp);
 
-            if exp + leeway < now {
+            if exp_num + leeway < now {
                 error_code!(
                     PgSqlErrorCode::ERRCODE_CHECK_VIOLATION,
-                    "Token used after it has expired",
+                    "Token used after it has expired (exp={exp})",
                 )
             }
         }
