@@ -138,14 +138,12 @@ fn valid_time(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postgres
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    let nbf_leeway = CLOCK_SKEW_LEEWAY.as_secs() - 10;
-    let exp_leeway = CLOCK_SKEW_LEEWAY.as_secs() + 10;
 
     let header = r#"{"kid":1}"#;
     let jwt1 = sign_jwt(
         sk,
         header,
-        json!({"jti": 1, "nbf": now - nbf_leeway, "exp": now + exp_leeway}),
+        json!({"jti": 1, "nbf": now - 10, "exp": now + 10}),
     );
     let jwt2 = sign_jwt(sk, header, json!({"jti": 2, "nbf": now - 10}));
     let jwt3 = sign_jwt(sk, header, json!({"jti": 3, "exp": now + 10}));
@@ -163,10 +161,12 @@ fn valid_time_leeway(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), p
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
+    let nbf_leeway = CLOCK_SKEW_LEEWAY.as_secs() - 1;
+    let exp_leeway = CLOCK_SKEW_LEEWAY.as_secs() - 1;
 
     let header = r#"{"kid":1}"#;
-    let jwt1 = sign_jwt(sk, header, json!({"jti": 1, "nbf": now + 59}));
-    let jwt2 = sign_jwt(sk, header, json!({"jti": 2, "exp": now - 59}));
+    let jwt1 = sign_jwt(sk, header, json!({"jti": 1, "nbf": now + nbf_leeway}));
+    let jwt2 = sign_jwt(sk, header, json!({"jti": 2, "exp": now - exp_leeway}));
 
     tx.execute("select auth.init()", &[])?;
     tx.execute("select auth.jwt_session_init($1)", &[&jwt1])?;
