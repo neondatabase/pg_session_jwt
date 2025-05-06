@@ -1,5 +1,3 @@
-mod gucs;
-
 use pgrx::prelude::*;
 
 pgrx::pg_module_magic!();
@@ -15,6 +13,8 @@ macro_rules! error_code {
     }};
 }
 
+mod gucs;
+
 #[allow(non_snake_case)]
 #[pg_guard]
 pub unsafe extern "C-unwind" fn _PG_init() {
@@ -23,21 +23,21 @@ pub unsafe extern "C-unwind" fn _PG_init() {
 
 #[pg_schema]
 pub mod auth {
-    use std::cell::{OnceCell, RefCell};
+    use std::cell::RefCell;
     use std::time::Duration;
 
     use pgrx::prelude::*;
     use pgrx::JsonB;
 
     use ed25519_dalek::{Signature, VerifyingKey};
-    use jose_jwk::jose_b64;
 
     use base64ct::{Base64UrlUnpadded, Decoder, Encoding};
     use serde::de::DeserializeOwned;
 
+    use crate::gucs::NEON_AUTH_JWT_RUNTIME_PARAM;
     use crate::gucs::{
-        NEON_AUTH_ENABLE_AUDIT_LOG, NEON_AUTH_JWK, NEON_AUTH_JWK_RUNTIME_PARAM, NEON_AUTH_JWT,
-        NEON_AUTH_JWT_RUNTIME_PARAM, POSTGREST_JWT, POSTGREST_JWT_RUNTIME_PARAM,
+        can_log_audit, get_jwk_guc, get_jwt_guc, get_postgrest_claims_from_guc, jwk_set,
+        match_jwt_guc, POSTGREST_JWT_RUNTIME_PARAM,
     };
 
     type Object = serde_json::Map<String, serde_json::Value>;
@@ -46,70 +46,9 @@ pub mod auth {
     /// bit more leeway here to account for any delays before getting to the extension.
     pub const CLOCK_SKEW_LEEWAY: Duration = Duration::from_secs(60);
 
-    /// A octet key pair CFRG-curve key, as defined in [RFC 8037]
-    ///
-    /// [RFC 8037]: https://www.rfc-editor.org/rfc/rfc8037
-    #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
-    pub struct Ed25519Okp {
-        pub kty: Kty,
-
-        /// The CFRG curve.
-        pub crv: OkpCurves,
-
-        /// The public key.
-        pub x: jose_b64::serde::Bytes<[u8; 32]>,
-    }
-
-    /// The CFRG Curve.
-    #[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Deserialize)]
-    #[non_exhaustive]
-    pub enum Kty {
-        OKP,
-    }
-
-    /// The CFRG Curve.
-    #[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Deserialize)]
-    #[non_exhaustive]
-    pub enum OkpCurves {
-        Ed25519,
-    }
-
     thread_local! {
-        static JWK: OnceCell<VerifyingKey> = const { OnceCell::new() };
         static JWT: RefCell<Option<(String, Object)>> = const { RefCell::new(None) };
         static JTI: RefCell<i64> = const { RefCell::new(0) };
-    }
-
-    fn get_jwk_guc() -> VerifyingKey {
-        let jwk = NEON_AUTH_JWK
-            .get()
-            .unwrap_or_else(|| {
-                error_code!(
-                    PgSqlErrorCode::ERRCODE_NO_DATA,
-                    format!("Missing runtime parameter: {}", NEON_AUTH_JWK_RUNTIME_PARAM)
-                )
-            })
-            .to_bytes();
-
-        JWK.with(|b| {
-            *b.get_or_init(|| {
-                let jwk: Ed25519Okp = serde_json::from_slice(jwk).unwrap_or_else(|e| {
-                    error_code!(
-                        PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
-                        "pg_session_jwt.jwk requires an ES256 JWK",
-                        e.to_string(),
-                    )
-                });
-
-                VerifyingKey::from_bytes(&jwk.x).unwrap_or_else(|e| {
-                    error_code!(
-                        PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
-                        "pg_session_jwt.jwk requires an ES256 JWK",
-                        e.to_string()
-                    )
-                })
-            })
-        })
     }
 
     /// Set the public key for this postgres session.
@@ -234,27 +173,17 @@ pub mod auth {
         validate_jwt();
     }
 
-    fn get_jwt_guc() -> Option<&'static str> {
-        Some(NEON_AUTH_JWT.get()?.to_str().unwrap_or_else(|e| {
-            error_code!(
-                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
-                format!("invalid JWT parameter {}", NEON_AUTH_JWT_RUNTIME_PARAM),
-                e.to_string(),
-            )
-        }))
-    }
-
     fn validate_jwt() -> Option<serde_json::Map<String, serde_json::Value>> {
-        let jwt = get_jwt_guc()?;
-        let key = get_jwk_guc();
-
         JWT.with_borrow_mut(|cached_jwt| {
             match cached_jwt {
-                Some((cached_jwt, payload)) if cached_jwt == jwt => {
+                Some((cached_jwt, payload)) if match_jwt_guc(&cached_jwt) => {
                     log_audit_validated_jwt(payload);
                     Some(payload.clone())
                 }
                 _ => {
+                    let jwt = get_jwt_guc()?;
+                    let key = get_jwk_guc();
+
                     let (body, sig) = jwt.rsplit_once('.').unwrap_or_else(|| {
                         error_code!(
                             PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
@@ -276,17 +205,12 @@ pub mod auth {
 
                     // update state
                     JTI.replace(jti);
-                    *cached_jwt = Some((jwt.to_string(), payload.clone()));
+                    *cached_jwt = Some((jwt, payload.clone()));
                     log_audit_validated_jwt(&payload);
                     Some(payload)
                 }
             }
         })
-    }
-
-    fn can_log_audit() -> bool {
-        let log_var = NEON_AUTH_ENABLE_AUDIT_LOG.get().map(|x| x.to_bytes());
-        matches!(log_var, Some(b"on"))
     }
 
     fn log_audit_validated_jwt(payload: &Object) {
@@ -317,9 +241,8 @@ pub mod auth {
         }
     }
 
-    fn get_claims_from_guc() -> Option<serde_json::Value> {
-        let claims: Option<serde_json::Value> =
-            serde_json::from_str(POSTGREST_JWT.get()?.to_str().unwrap_or("")).ok();
+    fn get_postgrest_claims() -> Option<serde_json::Value> {
+        let claims = get_postgrest_claims_from_guc();
 
         log_audit_guc_claims(
             POSTGREST_JWT_RUNTIME_PARAM,
@@ -333,8 +256,8 @@ pub mod auth {
     pub fn session() -> JsonB {
         // If the JWK is not defined, we fallback to the request.jwt.claims GUC
         // https://docs.postgrest.org/en/v12/references/transactions.html#request-headers-cookies-and-jwt-claims
-        if NEON_AUTH_JWK.get().is_none() {
-            return JsonB(get_claims_from_guc().unwrap_or(serde_json::Value::Null));
+        if !jwk_set() {
+            return JsonB(get_postgrest_claims().unwrap_or(serde_json::Value::Null));
         }
         JsonB(validate_jwt().map_or(serde_json::Value::Null, serde_json::Value::Object))
     }
@@ -342,9 +265,9 @@ pub mod auth {
     #[pg_extern(parallel_safe, stable)]
     pub fn user_id() -> Option<String> {
         // https://docs.postgrest.org/en/v12/references/transactions.html#request-headers-cookies-and-jwt-claims
-        if NEON_AUTH_JWK.get().is_none() {
+        if !jwk_set() {
             // Get subject from the claims JSONB
-            return get_claims_from_guc()
+            return get_postgrest_claims()
                 .and_then(|json| json.get("sub").cloned())
                 .and_then(|s| s.as_str().map(|s| s.to_owned()));
         }
