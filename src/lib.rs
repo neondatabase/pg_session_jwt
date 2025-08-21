@@ -17,13 +17,14 @@ macro_rules! error_code {
 
 #[allow(non_snake_case)]
 #[pg_guard]
-pub unsafe extern "C" fn _PG_init() {
+pub unsafe extern "C-unwind" fn _PG_init() {
     gucs::init();
 }
 
 #[pg_schema]
 pub mod auth {
     use std::cell::{OnceCell, RefCell};
+    use std::ffi::CStr;
     use std::time::Duration;
 
     use pgrx::prelude::*;
@@ -86,14 +87,14 @@ pub mod auth {
             .unwrap_or_else(|| {
                 error_code!(
                     PgSqlErrorCode::ERRCODE_NO_DATA,
-                    format!("Missing runtime parameter: {}", NEON_AUTH_JWK_RUNTIME_PARAM)
+                    format!("Missing runtime parameter: {}", convert_cstr(NEON_AUTH_JWK_RUNTIME_PARAM))
                 )
-            })
-            .to_bytes();
+            });
+        let jwk_bytes = jwk.to_bytes();
 
         JWK.with(|b| {
             *b.get_or_init(|| {
-                let jwk: Ed25519Okp = serde_json::from_slice(jwk).unwrap_or_else(|e| {
+                let jwk: Ed25519Okp = serde_json::from_slice(&jwk_bytes).unwrap_or_else(|e| {
                     error_code!(
                         PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
                         "pg_session_jwt.jwk requires an ES256 JWK",
@@ -219,7 +220,7 @@ pub mod auth {
         Spi::run(
             format!(
                 "SET {} = {}",
-                NEON_AUTH_JWT_RUNTIME_PARAM,
+                convert_cstr(NEON_AUTH_JWT_RUNTIME_PARAM),
                 spi::quote_literal(jwt)
             )
             .as_str(),
@@ -227,21 +228,21 @@ pub mod auth {
         .unwrap_or_else(|e| {
             error_code!(
                 PgSqlErrorCode::ERRCODE_S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED,
-                format!("Couldn't set {}", NEON_AUTH_JWT_RUNTIME_PARAM),
+                format!("Couldn't set {}", convert_cstr(NEON_AUTH_JWT_RUNTIME_PARAM)),
                 e.to_string(),
             )
         });
         validate_jwt();
     }
 
-    fn get_jwt_guc() -> Option<&'static str> {
+    fn get_jwt_guc() -> Option<String> {
         Some(NEON_AUTH_JWT.get()?.to_str().unwrap_or_else(|e| {
             error_code!(
                 PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
-                format!("invalid JWT parameter {}", NEON_AUTH_JWT_RUNTIME_PARAM),
+                format!("invalid JWT parameter {}", convert_cstr(NEON_AUTH_JWT_RUNTIME_PARAM)),
                 e.to_string(),
             )
-        }))
+        }).to_string())
     }
 
     fn validate_jwt() -> Option<serde_json::Map<String, serde_json::Value>> {
@@ -250,7 +251,7 @@ pub mod auth {
 
         JWT.with_borrow_mut(|cached_jwt| {
             match cached_jwt {
-                Some((cached_jwt, payload)) if cached_jwt == jwt => {
+                Some((cached_jwt, payload)) if cached_jwt == &jwt => {
                     log_audit_validated_jwt(payload);
                     Some(payload.clone())
                 }
@@ -276,7 +277,7 @@ pub mod auth {
 
                     // update state
                     JTI.replace(jti);
-                    *cached_jwt = Some((jwt.to_string(), payload.clone()));
+                    *cached_jwt = Some((jwt, payload.clone()));
                     log_audit_validated_jwt(&payload);
                     Some(payload)
                 }
@@ -285,8 +286,8 @@ pub mod auth {
     }
 
     fn can_log_audit() -> bool {
-        let log_var = NEON_AUTH_ENABLE_AUDIT_LOG.get().map(|x| x.to_bytes());
-        matches!(log_var, Some(b"on"))
+        let log_var = NEON_AUTH_ENABLE_AUDIT_LOG.get().map(|x| x.to_bytes().to_vec());
+        matches!(log_var.as_deref(), Some(b"on"))
     }
 
     fn log_audit_validated_jwt(payload: &Object) {
@@ -322,7 +323,7 @@ pub mod auth {
             serde_json::from_str(POSTGREST_JWT.get()?.to_str().unwrap_or("")).ok();
 
         log_audit_guc_claims(
-            POSTGREST_JWT_RUNTIME_PARAM,
+            &convert_cstr(POSTGREST_JWT_RUNTIME_PARAM),
             claims.as_ref().and_then(|v| v.as_object()),
         );
         claims
@@ -373,5 +374,13 @@ pub mod auth {
                 e.to_string(),
             )
         })
+    }
+
+    // TODO: Can remove this after https://github.com/rust-lang/rust/issues/139984
+    fn convert_cstr(cstr: &CStr) -> String {
+        match cstr.to_str() {
+            Ok(s) => s.to_string(),
+            Err(e) => format!("Decoding failed with error: {}", e)
+        }
     }
 }
