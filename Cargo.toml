@@ -19,6 +19,7 @@ pg14 = ["pgrx/pg14", "pgrx-tests/pg14" ]
 pg15 = ["pgrx/pg15", "pgrx-tests/pg15" ]
 pg16 = ["pgrx/pg16", "pgrx-tests/pg16" ]
 pg17 = ["pgrx/pg17", "pgrx-tests/pg17" ]
+pg18 = ["pgrx/pg18", "pgrx-tests/pg18"]
 pg_test = []
 
 [dependencies]
@@ -26,7 +27,7 @@ base64ct = { version = "1.6.0", features = ["std"] }
 heapless = { version = "0.8.0", features = ["serde"] }
 jose-jwk = { version = "0.1.2", default-features = false }
 ed25519-dalek = { version = "2", default-features = false }
-pgrx = "0.12.6"
+pgrx = "0.16.0"
 serde = { version = "1.0.203", features = ["derive"], default-features = false }
 serde_json = { version = "1.0.117", default-features = false }
 
