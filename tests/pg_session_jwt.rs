@@ -56,6 +56,14 @@ fn main() -> ExitCode {
         "test_session_fallback_when_not_set",
         test_session_fallback_when_not_set,
     ));
+    tests.push(test_without_jwk(
+        "test_uid",
+        test_uid,
+    ));
+    tests.push(test_without_jwk(
+        "test_jwt",
+        test_jwt,
+    ));
 
     run(&args, tests).exit_code()
 }
@@ -299,6 +307,87 @@ fn test_session_fallback_when_set(tx: &mut postgres::Client) -> Result<(), postg
         "Should return role from request.jwt.claims when set"
     );
 
+    Ok(())
+}
+
+fn test_uid(tx: &mut postgres::Client) -> Result<(), postgres::Error> {
+    // Test when JWK is not defined and request.jwt.claims is set
+    let test_uuid = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11";
+    tx.execute(&format!("SET request.jwt.claims = '{{\"sub\":\"{}\",\"role\":\"admin\"}}'", test_uuid), &[])?;
+    
+    let sub: Option<String> = tx.query_one("SELECT auth.uid()::text", &[])?.get(0);
+    assert_eq!(
+        sub,
+        Some(test_uuid.to_string()),
+        "Should return sub from request.jwt.claims when set"
+    );
+    
+
+    // Test comparison with uuid type
+    let compare_to_uuid: bool = tx.query_one(
+        "SELECT auth.uid() = $1::text::uuid",
+        &[&test_uuid]
+    )?.get(0);
+    assert!(
+        compare_to_uuid,
+        "auth.uid() should be comparable to uuid type"
+    );
+
+    // Test comparison with text type
+    // let compare_to_text: bool = tx.query_one(
+    //     "SELECT auth.uid() = $1::text",
+    //     &[&test_uuid]
+    // )?.get(0);
+    // assert!(
+    //     compare_to_text,
+    //     "auth.uid() should be comparable to text type"
+    // );
+    
+    
+    
+    Ok(())
+}
+
+fn test_jwt(tx: &mut postgres::Client) -> Result<(), postgres::Error> {
+    // Test 1: When request.jwt.claims is set
+    tx.execute("SET request.jwt.claims = '{\"sub\":\"test-user\",\"role\":\"admin\",\"exp\":1234567890}'", &[])?;
+    
+    let jwt_result: Option<String> = tx.query_one("SELECT auth.jwt()::text", &[])?.get(0);
+    assert!(jwt_result.is_some(), "auth.jwt() should return a value when request.jwt.claims is set");
+    
+    // Verify we can extract fields using jsonb operators
+    let sub: Option<String> = tx.query_one("SELECT (auth.jwt()->>'sub')", &[])?.get(0);
+    assert_eq!(sub, Some("test-user".to_string()), "Should extract sub field from jwt claims");
+    
+    let role: Option<String> = tx.query_one("SELECT (auth.jwt()->>'role')", &[])?.get(0);
+    assert_eq!(role, Some("admin".to_string()), "Should extract role field from jwt claims");
+    
+    let exp: Option<String> = tx.query_one("SELECT (auth.jwt()->>'exp')", &[])?.get(0);
+    assert_eq!(exp, Some("1234567890".to_string()), "Should extract exp field from jwt claims");
+    
+    // Test 2: When request.jwt.claim is set (should prefer claim over claims)
+    tx.execute("SET request.jwt.claim = '{\"sub\":\"claim-user\",\"aud\":\"test-audience\"}'", &[])?;
+    
+    let sub_from_claim: Option<String> = tx.query_one("SELECT (auth.jwt()->>'sub')", &[])?.get(0);
+    assert_eq!(
+        sub_from_claim, 
+        Some("claim-user".to_string()), 
+        "Should prefer request.jwt.claim over request.jwt.claims"
+    );
+    
+    let aud: Option<String> = tx.query_one("SELECT (auth.jwt()->>'aud')", &[])?.get(0);
+    assert_eq!(aud, Some("test-audience".to_string()), "Should extract aud field from jwt claim");
+    
+    // Test 3: When neither is set
+    tx.execute("RESET request.jwt.claim", &[])?;
+    tx.execute("RESET request.jwt.claims", &[])?;
+    
+    let jwt_null: Option<String> = tx.query_one("SELECT auth.jwt()::text", &[])?.get(0);
+    assert_eq!(jwt_null, None, "auth.jwt() should return NULL when neither claim nor claims is set");
+    
+    let is_null: bool = tx.query_one("SELECT auth.jwt() IS NULL", &[])?.get(0);
+    assert!(is_null, "auth.jwt() should return SQL NULL when neither GUC is set");
+    
     Ok(())
 }
 

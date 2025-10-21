@@ -383,4 +383,12 @@ pub mod auth {
             Err(e) => format!("Decoding failed with error: {}", e)
         }
     }
+
+    // SQL helper functions for accessing JWT claims from GUC settings
+    // These are defined in the migration file but included here for fresh installs
+    pgrx::extension_sql_file!(
+        "../sql/pg_session_jwt--0.3.1--0.4.0.sql",
+        name = "jwt_helper_functions",
+        requires = [session, user_id],
+    );
 }
