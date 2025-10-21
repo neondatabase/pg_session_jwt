@@ -63,7 +63,7 @@ where
         Option<&[&(dyn postgres::types::ToSql + Sync)]>,
     ) -> Result<T, postgres::Error>,
 {
-    let result = f(query.clone(), query_params.clone());
+    let result = f(query.clone(), query_params);
 
     match result {
         Ok(result) => Ok(result),
@@ -108,7 +108,7 @@ where
 
                 Err(eyre!(message))
             } else {
-                return Err(e).wrap_err("non-DbError");
+                Err(e).wrap_err("non-DbError")
             }
         }
     }
@@ -176,7 +176,7 @@ pub fn run_test(
                 (
                     "<unknown>".to_string(),
                     "<unknown>".to_string(),
-                    format!("{error_as_string}"),
+                    error_as_string.to_owned(),
                 )
             };
 
@@ -195,7 +195,7 @@ pub fn run_test(
         );
     } else if let Some(message) = expected_error {
         // we expected an ERROR, but didn't get one
-        return Err(eyre!("Expected error: {message}"));
+        Err(eyre!("Expected error: {message}"))
     } else {
         Ok(())
     }
@@ -279,7 +279,7 @@ fn client(options: Option<&str>, user: &str) -> eyre::Result<(postgres::Client, 
                 .expect("unable to determine test port"),
         )
         .user(user)
-        .dbname(&get_pg_dbname());
+        .dbname(get_pg_dbname());
 
     if let Some(options) = options {
         config.options(options);
@@ -296,7 +296,7 @@ fn client(options: Option<&str>, user: &str) -> eyre::Result<(postgres::Client, 
     )
     .wrap_err("There was an issue attempting to get the session ID from Postgres")?;
 
-    let session_id = match sid_query_result.get(0) {
+    let session_id = match sid_query_result.first() {
         Some(row) => row.get::<&str, &str>("sid").to_string(),
         None => Err(eyre!("Failed to obtain a client Session ID from Postgres"))?,
     };
@@ -607,8 +607,7 @@ fn monitor_pg(mut command: Command, cmd_string: String, loglines: LogLines) -> S
                     .to_string(),
             )
             .unwrap();
-            // IMPORTANT: Rust string literals are not naturally null-terminated
-            libc::printf("%s\0".as_ptr().cast(), message_string.as_ptr());
+            libc::printf(c"%s".as_ptr(), message_string.as_ptr());
         });
 
         eprintln!(
@@ -660,7 +659,7 @@ fn monitor_pg(mut command: Command, cmd_string: String, loglines: LogLines) -> S
             // }
 
             let mut loglines = loglines.lock().unwrap();
-            let session_lines = loglines.entry(session_id).or_insert_with(Vec::new);
+            let session_lines = loglines.entry(session_id).or_default();
             session_lines.push(line);
         }
 
@@ -761,7 +760,7 @@ fn get_extension_name() -> eyre::Result<String> {
 
 fn get_pgdata_path() -> eyre::Result<PathBuf> {
     let mut target_dir = get_target_dir()?;
-    target_dir.push(&format!(
+    target_dir.push(format!(
         "pgrx-test-data-{}",
         pg_sys::get_pg_major_version_num()
     ));
@@ -771,7 +770,7 @@ fn get_pgdata_path() -> eyre::Result<PathBuf> {
 fn get_pid_file() -> eyre::Result<PathBuf> {
     let mut pgdata = get_pgdata_path()?;
     pgdata.push("postmaster.pid");
-    return Ok(pgdata);
+    Ok(pgdata)
 }
 
 pub(crate) fn get_pg_dbname() -> &'static str {
@@ -800,10 +799,7 @@ fn get_runas() -> Option<String> {
 }
 
 fn get_named_capture(regex: &regex::Regex, name: &'static str, against: &str) -> Option<String> {
-    match regex.captures(against) {
-        Some(cap) => Some(cap[name].to_string()),
-        None => None,
-    }
+    regex.captures(against).map(|cap| cap[name].to_string())
 }
 
 fn get_cargo_test_features() -> eyre::Result<clap_cargo::Features> {
@@ -857,7 +853,7 @@ fn get_cargo_args() -> Vec<String> {
                 && !process.cmd().iter().any(|arg| arg == "pgrx")
             {
                 // ... do we want its args
-                return process.cmd().iter().cloned().collect();
+                return process.cmd().to_vec();
             }
         }
 
@@ -899,5 +895,5 @@ fn find_on_path(program: &str) -> Option<PathBuf> {
 }
 
 fn use_valgrind() -> bool {
-    std::env::var_os("USE_VALGRIND").is_some_and(|s| s.len() > 0)
+    std::env::var_os("USE_VALGRIND").is_some_and(|s| !s.is_empty())
 }

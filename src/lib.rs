@@ -94,7 +94,7 @@ pub mod auth {
 
         JWK.with(|b| {
             *b.get_or_init(|| {
-                let jwk: Ed25519Okp = serde_json::from_slice(&jwk_bytes).unwrap_or_else(|e| {
+                let jwk: Ed25519Okp = serde_json::from_slice(jwk_bytes).unwrap_or_else(|e| {
                     error_code!(
                         PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
                         "pg_session_jwt.jwk requires an ES256 JWK",
