@@ -359,6 +359,11 @@ pub mod auth {
         }
     }
 
+    #[pg_extern(parallel_safe, stable)]
+    pub fn uid() -> Option<String> {
+        user_id()
+    }
+
     fn json_base64_decode<D: DeserializeOwned>(s: &str) -> D {
         let r = Decoder::<Base64UrlUnpadded>::new(s.as_bytes()).unwrap_or_else(|e| {
             error_code!(

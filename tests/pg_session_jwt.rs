@@ -186,6 +186,10 @@ fn test_pg_session_jwt(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(),
     let user_id = user_id.get::<_, String>("user_id");
     assert_eq!(user_id, "foo");
 
+    let uid = tx.query_one("select auth.uid()", &[])?;
+    let uid = uid.get::<_, String>("uid");
+    assert_eq!(uid, user_id);
+
     tx.execute("select auth.jwt_session_init($1)", &[&jwt2])?;
     let user_id = tx.query_one("select auth.user_id()", &[])?;
     let user_id = user_id.get::<_, String>("user_id");

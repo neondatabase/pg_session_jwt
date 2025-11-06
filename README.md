@@ -96,6 +96,9 @@ Returns the user ID associated with the current session. The behavior depends on
 
 This dual behavior allows for flexible authentication scenarios while maintaining security when JWK is available, and compatibility with PostgREST JWT claims when operating without JWK.
 
+### 5\. auth.uid() → text
+Alias for `auth.user_id()`
+
 Audit logs
 ----------
 In order to enable audit logs set `pg_session_jwt.audit_log` as `on`.

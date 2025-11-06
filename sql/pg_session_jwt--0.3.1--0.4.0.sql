@@ -1,0 +1,2 @@
+-- no migration necessary.
+-- adds function alias auth.uid() for auth.user_id()

@@ -7,7 +7,7 @@ pgrx](https://github.com/pgcentralfoundation/pgrx#system-requirements).
 Now you can install `cargo-pgrx` but make sure to install the same version
 that's used by this extension:
 ```console
-cargo install --locked --version 0.12.6 cargo-pgrx
+cargo install --locked --version 0.16.1 cargo-pgrx
 ```
 
 Let's initialize pgrx.
@@ -24,7 +24,7 @@ refer to the README file).
 MY_JWK=...
 export PGOPTIONS="-c pg_session_jwt.jwk=$MY_JWK"
 
-cargo pgrx run pg16
+cargo pgrx run pg17
 ```
 
 Eventually you will be logged into postgres so now you can run:
@@ -55,3 +55,6 @@ You can run test-suite
 ```console
 cargo test
 ```
+
+Make sure to update version in `Cargo.toml` file and create corresponding
+migration file in `sql/` folder.
