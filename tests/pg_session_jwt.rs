@@ -233,6 +233,10 @@ fn test_jwt_claim_sub_with_jwk(
         "Should use JWT sub claim when JWK is defined"
     );
 
+    let uid = tx.query_one("SELECT auth.uid()", &[])?;
+    let uid: Option<String> = uid.get(0);
+    assert_eq!(uid, user_id);
+
     Ok(())
 }
 
@@ -246,6 +250,10 @@ fn test_jwt_claim_sub_from_claims(tx: &mut postgres::Client) -> Result<(), postg
         Some("test-user".to_string()),
         "Should return the value from request.jwt.claims sub field"
     );
+
+    let uid = tx.query_one("SELECT auth.uid()", &[])?;
+    let uid: Option<String> = uid.get(0);
+    assert_eq!(uid, user_id);
 
     Ok(())
 }
@@ -278,9 +286,13 @@ fn test_session_with_jwk(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(
     
     let sub: Option<String> = tx.query_one("SELECT (auth.session()->>'sub')", &[])?.get(0);
     assert_eq!(sub, Some("jwt-user".to_string()), "Should use JWT sub claim when JWK is defined");
+    let sub_alias: Option<String> = tx.query_one("SELECT (auth.jwt()->>'sub')", &[])?.get(0);
+    assert_eq!(sub_alias, sub);
     
     let role: Option<String> = tx.query_one("SELECT (auth.session()->>'role')", &[])?.get(0);
     assert_eq!(role, Some("admin".to_string()), "Should use JWT role claim when JWK is defined");
+    let role_alias: Option<String> = tx.query_one("SELECT (auth.session()->>'role')", &[])?.get(0);
+    assert_eq!(role_alias, role);
 
     Ok(())
 }

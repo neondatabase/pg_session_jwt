@@ -341,6 +341,11 @@ pub mod auth {
     }
 
     #[pg_extern(parallel_safe, stable)]
+    pub fn jwt() -> JsonB {
+        session()
+    }
+
+    #[pg_extern(parallel_safe, stable)]
     pub fn user_id() -> Option<String> {
         // https://docs.postgrest.org/en/v12/references/transactions.html#request-headers-cookies-and-jwt-claims
         if NEON_AUTH_JWK.get().is_none() {
