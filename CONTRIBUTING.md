@@ -39,8 +39,7 @@ Now you can explore available functions with
 
 If you introduce new function make sure to reload the extension with
 ```sql
-DROP EXTENSION pg_session_jwt;
-CREATE EXTENSION pg_session_jwt;
+ALTER EXTENSION pg_session_jwt UPDATE;
 ```
 
 ## Before sending a PR
@@ -56,7 +55,16 @@ You can run test-suite
 cargo test
 ```
 
+## New version
+
 Make sure to update version in `Cargo.toml` file and create corresponding
 [migration
-file](https://www.postgresql.org/docs/current/extend-extensions.html#EXTEND-EXTENSIONS-FILES)
+file(s)](https://www.postgresql.org/docs/current/extend-extensions.html#EXTEND-EXTENSIONS-FILES)
 in `sql/` folder.
+
+Both upgrade and downgrade path should be tested, e.g.:
+```sql
+ALTER EXTENSION pg_session_jwt UPDATE TO '0.4.0'; -- upgrade
+ALTER EXTENSION pg_session_jwt UPDATE TO '0.3.1'; -- downgrade
+ALTER EXTENSION pg_session_jwt UPDATE TO '0.4.0'; -- upgrade
+```
