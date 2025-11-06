@@ -57,4 +57,6 @@ cargo test
 ```
 
 Make sure to update version in `Cargo.toml` file and create corresponding
-migration file in `sql/` folder.
+[migration
+file](https://www.postgresql.org/docs/current/extend-extensions.html#EXTEND-EXTENSIONS-FILES)
+in `sql/` folder.
