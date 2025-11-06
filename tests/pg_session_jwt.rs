@@ -291,7 +291,7 @@ fn test_session_with_jwk(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(
     
     let role: Option<String> = tx.query_one("SELECT (auth.session()->>'role')", &[])?.get(0);
     assert_eq!(role, Some("admin".to_string()), "Should use JWT role claim when JWK is defined");
-    let role_alias: Option<String> = tx.query_one("SELECT (auth.session()->>'role')", &[])?.get(0);
+    let role_alias: Option<String> = tx.query_one("SELECT (auth.jwt()->>'role')", &[])?.get(0);
     assert_eq!(role_alias, role);
 
     Ok(())
@@ -307,6 +307,8 @@ fn test_session_fallback_when_set(tx: &mut postgres::Client) -> Result<(), postg
         Some("test-user".to_string()),
         "Should return sub from request.jwt.claims when set"
     );
+    let sub_alias: Option<String> = tx.query_one("SELECT (auth.jwt()->>'sub')", &[])?.get(0);
+    assert_eq!(sub_alias, sub);
     
     let role: Option<String> = tx.query_one("SELECT (auth.session()->>'role')", &[])?.get(0);
     assert_eq!(
@@ -314,6 +316,8 @@ fn test_session_fallback_when_set(tx: &mut postgres::Client) -> Result<(), postg
         Some("admin".to_string()),
         "Should return role from request.jwt.claims when set"
     );
+    let role_alias: Option<String> = tx.query_one("SELECT (auth.jwt()->>'role')", &[])?.get(0);
+    assert_eq!(role_alias, role);
 
     Ok(())
 }
@@ -324,9 +328,13 @@ fn test_session_fallback_when_not_set(tx: &mut postgres::Client) -> Result<(), p
     
     let session: String = tx.query_one("SELECT auth.session()::text", &[])?.get(0);
     assert_eq!(session, "null", "Should return null when request.jwt.claims is not set");
+    let session_alias: String = tx.query_one("SELECT auth.jwt()::text", &[])?.get(0);
+    assert_eq!(session_alias, session);
 
     let is_null: bool = tx.query_one("SELECT auth.session() IS NULL", &[])?.get(0);
     assert!(!is_null, "Session should return JSON null, not SQL NULL");
+    let is_null_alias: bool = tx.query_one("SELECT auth.jwt() IS NULL", &[])?.get(0);
+    assert_eq!(is_null_alias, is_null);
 
     Ok(())
 }
