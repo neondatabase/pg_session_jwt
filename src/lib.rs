@@ -28,10 +28,11 @@ pub mod auth {
     use std::time::Duration;
 
     use pgrx::prelude::*;
-    use pgrx::JsonB;
+    use pgrx::{JsonB, Uuid as PgUuid};
 
     use ed25519_dalek::{Signature, VerifyingKey};
     use jose_jwk::jose_b64;
+    use uuid::Uuid;
 
     use base64ct::{Base64UrlUnpadded, Decoder, Encoding};
     use serde::de::DeserializeOwned;
@@ -365,8 +366,12 @@ pub mod auth {
     }
 
     #[pg_extern(parallel_safe, stable)]
-    pub fn uid() -> Option<String> {
-        user_id()
+    pub fn uid() -> Option<pgrx::Uuid> {
+        let user_id = user_id()?;
+        if let Ok(uuid) = Uuid::parse_str(&user_id) {
+            return Some(PgUuid::from_bytes(*uuid.as_bytes()))
+        }
+        None
     }
 
     fn json_base64_decode<D: DeserializeOwned>(s: &str) -> D {

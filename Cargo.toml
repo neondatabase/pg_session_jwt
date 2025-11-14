@@ -30,6 +30,7 @@ ed25519-dalek = { version = "2", default-features = false }
 pgrx = "0.16.1"
 serde = { version = "1.0.203", features = ["derive"], default-features = false }
 serde_json = { version = "1.0.117", default-features = false }
+uuid = "1.18.1"
 
 [dev-dependencies]
 eyre = "0.6.12"

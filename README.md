@@ -99,8 +99,9 @@ Returns the user ID associated with the current session. The behavior depends on
 
 This dual behavior allows for flexible authentication scenarios while maintaining security when JWK is available, and compatibility with PostgREST JWT claims when operating without JWK.
 
-### 6\. auth.uid() → text
-Alias for `auth.user_id()`
+### 6\. auth.uid() → uuid
+Similar to `auth.user_id()` but returns UUID. Expects `"sub"` to be UUID,
+otherwise returns NULL.
 
 Audit logs
 ----------

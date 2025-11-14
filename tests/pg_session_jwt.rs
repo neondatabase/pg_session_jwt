@@ -234,14 +234,27 @@ fn test_jwt_claim_sub_with_jwk(
 
 fn test_jwt_claim_sub_from_claims(tx: &mut postgres::Client) -> Result<(), postgres::Error> {
     // Test when JWK is not defined and request.jwt.claims contains sub
-    tx.execute(r#"SET request.jwt.claims = '{"sub":"test-user"}'"#, &[])?;
+    let sub = "00000000-0000-0000-0000-000000000000";
+    tx.execute(format!("SET request.jwt.claims = '{{\"sub\":\"{sub}\"}}'").as_str(), &[])?;
     let user_id = tx.query_one("SELECT auth.user_id()", &[])?;
     let user_id: Option<String> = user_id.get(0);
     assert_eq!(
         user_id,
-        Some("test-user".to_string()),
+        Some(sub.to_string()),
         "Should return the value from request.jwt.claims sub field"
     );
+
+    let uid = tx.query_one("SELECT auth.uid()::text", &[])?;
+    let uid: Option<String> = uid.get(0);
+    assert_eq!(
+        uid,
+        user_id,
+        "Should return the same value as auth.user_id() when auth.uid() is called"
+    );
+
+    let uid_is_uuid = tx.query_one(format!("SELECT auth.uid() = '{sub}'::uuid").as_str(), &[])?;
+    let uid_is_uuid: Option<bool> = uid_is_uuid.get(0);
+    assert!(uid_is_uuid.unwrap(), "Should return UUID type when auth.uid() is called");
 
     Ok(())
 }
@@ -256,6 +269,14 @@ fn test_jwt_claim_sub_when_claims_not_set(
     assert_eq!(
         user_id, None,
         "Should return NULL when request.jwt.claims is not set"
+    );
+
+    let uid = tx.query_one("SELECT auth.uid()::text", &[])?;
+    let uid: Option<String> = uid.get(0);
+    assert_eq!(
+        uid,
+        None,
+        "Should return NULL when request.jwt.claims is not set and auth.uid() is called"
     );
 
     Ok(())
