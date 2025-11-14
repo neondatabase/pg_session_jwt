@@ -220,7 +220,7 @@ fn test_jwt_claim_sub_with_jwk(
     tx.execute("select auth.jwt_session_init($1)", &[&jwt])?;
 
     // Set request.jwt.claims, but it should be ignored since JWK is defined
-    tx.execute("SET request.jwt.claims = '{\"sub\":\"fallback-user\"}'", &[])?;
+    tx.execute(r#"SET request.jwt.claims = '{"sub":"fallback-user"}'"#, &[])?;
     let user_id = tx.query_one("SELECT auth.user_id()", &[])?;
     let user_id: Option<String> = user_id.get(0);
     assert_eq!(
@@ -234,7 +234,7 @@ fn test_jwt_claim_sub_with_jwk(
 
 fn test_jwt_claim_sub_from_claims(tx: &mut postgres::Client) -> Result<(), postgres::Error> {
     // Test when JWK is not defined and request.jwt.claims contains sub
-    tx.execute("SET request.jwt.claims = '{\"sub\":\"test-user\"}'", &[])?;
+    tx.execute(r#"SET request.jwt.claims = '{"sub":"test-user"}'"#, &[])?;
     let user_id = tx.query_one("SELECT auth.user_id()", &[])?;
     let user_id: Option<String> = user_id.get(0);
     assert_eq!(
@@ -270,7 +270,7 @@ fn test_session_with_jwk(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(
     tx.execute("select auth.jwt_session_init($1)", &[&jwt])?;
 
     // Set request.jwt.claims, but it should be ignored since JWK is defined
-    tx.execute("SET request.jwt.claims = '{\"sub\":\"fallback-user\",\"role\":\"user\"}'", &[])?;
+    tx.execute(r#"SET request.jwt.claims = '{"sub":"fallback-user","role":"user"}'"#, &[])?;
     
     let sub: Option<String> = tx.query_one("SELECT (auth.session()->>'sub')", &[])?.get(0);
     assert_eq!(sub, Some("jwt-user".to_string()), "Should use JWT sub claim when JWK is defined");
@@ -287,7 +287,7 @@ fn test_session_with_jwk(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(
 
 fn test_session_fallback_when_set(tx: &mut postgres::Client) -> Result<(), postgres::Error> {
     // Test when JWK is not defined and request.jwt.claims is set
-    tx.execute("SET request.jwt.claims = '{\"sub\":\"test-user\",\"role\":\"admin\"}'", &[])?;
+    tx.execute(r#"SET request.jwt.claims = '{"sub":"test-user","role":"admin"}'"#, &[])?;
     
     let sub: Option<String> = tx.query_one("SELECT (auth.session()->>'sub')", &[])?.get(0);
     assert_eq!(
