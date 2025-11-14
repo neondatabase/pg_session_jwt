@@ -369,7 +369,7 @@ pub mod auth {
     pub fn uid() -> Option<pgrx::Uuid> {
         let user_id = user_id()?;
         if let Ok(uuid) = Uuid::parse_str(&user_id) {
-            return Some(PgUuid::from_bytes(*uuid.as_bytes()))
+            return Some(PgUuid::from_bytes(*uuid.as_bytes()));
         }
         None
     }
