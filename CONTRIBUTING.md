@@ -6,12 +6,12 @@ pgrx](https://github.com/pgcentralfoundation/pgrx#system-requirements).
 
 Now you can install `cargo-pgrx` but make sure to install the same version
 that's used by this extension:
-```console
+```sh
 cargo install --locked --version 0.12.6 cargo-pgrx
 ```
 
 Let's initialize pgrx.
-```console
+```sh
 cargo pgrx init
 ```
 
@@ -20,8 +20,7 @@ cargo pgrx init
 It's time to run `pg_session_jwt` locally. Please note that `pg_session_jwt.jwk`
 parameter MUST be set when new connection is created (for more details please
 refer to the README file).
-```console
-MY_JWK=...
+```sh
 export PGOPTIONS="-c pg_session_jwt.jwk=$MY_JWK"
 
 cargo pgrx run pg16
@@ -47,7 +46,7 @@ CREATE EXTENSION pg_session_jwt;
 
 ### Setup pre-commit hooks (recommended)
 
-```console
+```sh
 python -m venv .venv
 source .venv/bin/activate
 pip install pre-commit
@@ -62,12 +61,12 @@ If you're using VSCode/Cursor we recommend you to use directly the `rust-analyze
 ```
 
 ### Manual linting
-```console
+```sh
 cargo fmt --all
 cargo clippy -p pg_session_jwt -- -D warnings
 ```
 
 ### Run tests
-```console
+```sh
 cargo test
 ```
