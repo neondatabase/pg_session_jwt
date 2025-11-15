@@ -82,19 +82,20 @@ pub mod auth {
     }
 
     fn get_jwk_guc() -> VerifyingKey {
-        let jwk = NEON_AUTH_JWK
-            .get()
-            .unwrap_or_else(|| {
-                error_code!(
-                    PgSqlErrorCode::ERRCODE_NO_DATA,
-                    format!("Missing runtime parameter: {}", convert_cstr(NEON_AUTH_JWK_RUNTIME_PARAM))
+        let jwk = NEON_AUTH_JWK.get().unwrap_or_else(|| {
+            error_code!(
+                PgSqlErrorCode::ERRCODE_NO_DATA,
+                format!(
+                    "Missing runtime parameter: {}",
+                    convert_cstr(NEON_AUTH_JWK_RUNTIME_PARAM)
                 )
-            });
+            )
+        });
         let jwk_bytes = jwk.to_bytes();
 
         JWK.with(|b| {
             *b.get_or_init(|| {
-                let jwk: Ed25519Okp = serde_json::from_slice(&jwk_bytes).unwrap_or_else(|e| {
+                let jwk: Ed25519Okp = serde_json::from_slice(jwk_bytes).unwrap_or_else(|e| {
                     error_code!(
                         PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
                         "pg_session_jwt.jwk requires an ES256 JWK",
@@ -236,13 +237,22 @@ pub mod auth {
     }
 
     fn get_jwt_guc() -> Option<String> {
-        Some(NEON_AUTH_JWT.get()?.to_str().unwrap_or_else(|e| {
-            error_code!(
-                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
-                format!("invalid JWT parameter {}", convert_cstr(NEON_AUTH_JWT_RUNTIME_PARAM)),
-                e.to_string(),
-            )
-        }).to_string())
+        Some(
+            NEON_AUTH_JWT
+                .get()?
+                .to_str()
+                .unwrap_or_else(|e| {
+                    error_code!(
+                        PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                        format!(
+                            "invalid JWT parameter {}",
+                            convert_cstr(NEON_AUTH_JWT_RUNTIME_PARAM)
+                        ),
+                        e.to_string(),
+                    )
+                })
+                .to_string(),
+        )
     }
 
     fn validate_jwt() -> Option<serde_json::Map<String, serde_json::Value>> {
@@ -286,7 +296,9 @@ pub mod auth {
     }
 
     fn can_log_audit() -> bool {
-        let log_var = NEON_AUTH_ENABLE_AUDIT_LOG.get().map(|x| x.to_bytes().to_vec());
+        let log_var = NEON_AUTH_ENABLE_AUDIT_LOG
+            .get()
+            .map(|x| x.to_bytes().to_vec());
         matches!(log_var.as_deref(), Some(b"on"))
     }
 
@@ -380,7 +392,7 @@ pub mod auth {
     fn convert_cstr(cstr: &CStr) -> String {
         match cstr.to_str() {
             Ok(s) => s.to_string(),
-            Err(e) => format!("Decoding failed with error: {}", e)
+            Err(e) => format!("Decoding failed with error: {e}"),
         }
     }
 }

@@ -45,13 +45,29 @@ CREATE EXTENSION pg_session_jwt;
 
 ## Before sending a PR
 
-You can lint your code with
+### Setup pre-commit hooks (recommended)
+
 ```console
-rustfmt src/*.rs tests/*.rs
-cargo clippy --fix --allow-staged
+python -m venv .venv
+source .venv/bin/activate
+pip install pre-commit
+pre-commit install
 ```
 
-You can run test-suite
+If you're using VSCode/Cursor we recommend you to use directly the `rust-analyzer` extension to run the checks with clippy.
+```jsonc
+{
+    "rust-analyzer.check.command": "clippy"
+}
+```
+
+### Manual linting
+```console
+cargo fmt --all
+cargo clippy -p pg_session_jwt -- -D warnings
+```
+
+### Run tests
 ```console
 cargo test
 ```

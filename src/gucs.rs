@@ -2,17 +2,14 @@ use pgrx::*;
 use std::ffi::{CStr, CString};
 
 pub static NEON_AUTH_JWK_RUNTIME_PARAM: &CStr = c"pg_session_jwt.jwk";
-pub static NEON_AUTH_JWK: GucSetting<Option<CString>> =
-    GucSetting::<Option<CString>>::new(None);
+pub static NEON_AUTH_JWK: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 pub static NEON_AUTH_JWT_RUNTIME_PARAM: &CStr = c"pg_session_jwt.jwt";
-pub static NEON_AUTH_JWT: GucSetting<Option<CString>> =
-    GucSetting::<Option<CString>>::new(None);
+pub static NEON_AUTH_JWT: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 pub static NEON_AUTH_ENABLE_AUDIT_LOG_PARAM: &CStr = c"pg_session_jwt.audit_log";
 pub static NEON_AUTH_ENABLE_AUDIT_LOG: GucSetting<Option<CString>> =
     GucSetting::<Option<CString>>::new(None);
 pub static POSTGREST_JWT_RUNTIME_PARAM: &CStr = c"request.jwt.claims";
-pub static POSTGREST_JWT: GucSetting<Option<CString>> =
-    GucSetting::<Option<CString>>::new(None);
+pub static POSTGREST_JWT: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 
 pub fn init() {
     GucRegistry::define_string_guc(

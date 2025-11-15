@@ -1,0 +1,20 @@
+# Pre-commit hooks configuration
+# Install: pip install pre-commit && pre-commit install
+# Run manually: pre-commit run --all-files
+
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt --all
+        entry: cargo
+        language: system
+        args: ["fmt", "--all"]
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy -p pg_session_jwt -- -D warnings
+        entry: cargo
+        language: system
+        args: ["clippy", "-p", "pg_session_jwt", "--", "-D", "warnings"]
+        pass_filenames: false
