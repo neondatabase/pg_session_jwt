@@ -367,11 +367,9 @@ pub mod auth {
 
     #[pg_extern(parallel_safe, stable)]
     pub fn uid() -> Option<pgrx::Uuid> {
-        let user_id = user_id()?;
-        if let Ok(uuid) = Uuid::parse_str(&user_id) {
-            return Some(PgUuid::from_bytes(*uuid.as_bytes()));
-        }
-        None
+        user_id()
+            .and_then(|uuid| Uuid::parse_str(&uuid).ok())
+            .map(|uuid| PgUuid::from_bytes(*uuid.as_bytes()))
     }
 
     fn json_base64_decode<D: DeserializeOwned>(s: &str) -> D {
