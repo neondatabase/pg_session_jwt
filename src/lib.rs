@@ -28,10 +28,11 @@ pub mod auth {
     use std::time::Duration;
 
     use pgrx::prelude::*;
-    use pgrx::JsonB;
+    use pgrx::{JsonB, Uuid as PgUuid};
 
     use ed25519_dalek::{Signature, VerifyingKey};
     use jose_jwk::jose_b64;
+    use uuid::Uuid;
 
     use base64ct::{Base64UrlUnpadded, Decoder, Encoding};
     use serde::de::DeserializeOwned;
@@ -341,6 +342,11 @@ pub mod auth {
     }
 
     #[pg_extern(parallel_safe, stable)]
+    pub fn jwt() -> JsonB {
+        session()
+    }
+
+    #[pg_extern(parallel_safe, stable)]
     pub fn user_id() -> Option<String> {
         // https://docs.postgrest.org/en/v12/references/transactions.html#request-headers-cookies-and-jwt-claims
         if NEON_AUTH_JWK.get().is_none() {
@@ -357,6 +363,13 @@ pub mod auth {
                 "invalid subject claim in the JWT"
             ),
         }
+    }
+
+    #[pg_extern(parallel_safe, stable)]
+    pub fn uid() -> Option<pgrx::Uuid> {
+        user_id()
+            .and_then(|uuid| Uuid::parse_str(&uuid).ok())
+            .map(|uuid| PgUuid::from_bytes(*uuid.as_bytes()))
     }
 
     fn json_base64_decode<D: DeserializeOwned>(s: &str) -> D {

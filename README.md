@@ -82,7 +82,10 @@ Retrieves JWT session data. The behavior depends on whether a JWK is defined:
 
 This dual behavior allows for flexible session management while maintaining security when JWK is available, and compatibility with PostgREST JWT claims when operating without JWK.
 
-### 4\. auth.user\_id() → text
+### 4\. auth.jwt() → jsonb
+Alias for `auth.session()`
+
+### 5\. auth.user\_id() → text
 
 Returns the user ID associated with the current session. The behavior depends on whether a JWK is defined:
 
@@ -95,6 +98,10 @@ Returns the user ID associated with the current session. The behavior depends on
   - Returns NULL if `request.jwt.claims` is not set, is empty, or does not contain a valid string in its `"sub"` field.
 
 This dual behavior allows for flexible authentication scenarios while maintaining security when JWK is available, and compatibility with PostgREST JWT claims when operating without JWK.
+
+### 6\. auth.uid() → uuid
+Similar to `auth.user_id()` but returns UUID. Expects `"sub"` to be UUID,
+otherwise returns NULL.
 
 Audit logs
 ----------
