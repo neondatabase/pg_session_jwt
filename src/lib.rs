@@ -79,7 +79,6 @@ pub mod auth {
     thread_local! {
         static JWK: OnceCell<VerifyingKey> = const { OnceCell::new() };
         static JWT: RefCell<Option<(String, Object)>> = const { RefCell::new(None) };
-        static JTI: RefCell<i64> = const { RefCell::new(0) };
     }
 
     fn get_jwk_guc() -> VerifyingKey {
@@ -139,27 +138,38 @@ pub mod auth {
             });
     }
 
-    fn verify_token_id(payload: &Object) -> i64 {
-        let jti = payload
-            .get("jti")
-            .and_then(|x| x.as_i64())
-            .unwrap_or_else(|| {
+    fn verify_token_id(payload: &Object) {
+        let raw_jti = payload.get("jti").unwrap_or_else(|| {
+            error_code!(
+                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                "JWT payload must contain a valid 'jti' (JWT ID)",
+            )
+        });
+
+        match raw_jti {
+            serde_json::Value::String(value) if !value.is_empty() => {
+                // Valid string JTI
+            }
+            serde_json::Value::Number(value) if value.is_i64() => {
+                // Valid i64 JTI
+            }
+            serde_json::Value::Number(value) if value.is_u64() => {
+                let number = value.as_u64().expect("checked above");
+                if number > i64::MAX as u64 {
+                    error_code!(
+                        PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                        "JWT payload must contain a valid 'jti' (JWT ID)",
+                    );
+                }
+                // Valid u64 JTI that fits in i64 range
+            }
+            _ => {
                 error_code!(
                     PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
                     "JWT payload must contain a valid 'jti' (JWT ID)",
-                )
-            });
-
-        JTI.with_borrow(|t| {
-            if jti <= *t {
-                error_code!(
-                    PgSqlErrorCode::ERRCODE_CHECK_VIOLATION,
-                    "Token ID must be strictly monotonically increasing."
                 );
             }
-        });
-
-        jti
+        }
     }
 
     fn verify_time(payload: &Object) {
@@ -252,7 +262,7 @@ pub mod auth {
 
         JWT.with_borrow_mut(|cached_jwt| {
             match cached_jwt {
-                Some((cached_jwt, payload)) if cached_jwt == &jwt => {
+                Some((cached_jwt_str, payload)) if cached_jwt_str == &jwt => {
                     log_audit_validated_jwt(payload);
                     Some(payload.clone())
                 }
@@ -273,11 +283,9 @@ pub mod auth {
                     verify_signature(&key, body, sig);
 
                     let payload: Object = json_base64_decode(payload);
-                    let jti = verify_token_id(&payload);
+                    verify_token_id(&payload);
                     verify_time(&payload);
 
-                    // update state
-                    JTI.replace(jti);
                     *cached_jwt = Some((jwt, payload.clone()));
                     log_audit_validated_jwt(&payload);
                     Some(payload)

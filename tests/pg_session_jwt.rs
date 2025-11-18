@@ -17,9 +17,6 @@ fn main() -> ExitCode {
 
     let mut tests = vec![];
 
-    let err = "Token ID must be strictly monotonically increasing.";
-    tests.push(test_fn("wrong_txid", Some(err), wrong_txid));
-
     let err = "Token used before it is ready";
     tests.push(test_fn("invalid_nbf", Some(err), invalid_nbf));
 
@@ -30,6 +27,8 @@ fn main() -> ExitCode {
     tests.push(test_fn("valid_time_leeway", None, valid_time_leeway));
     tests.push(test_fn("test_pg_session_jwt", None, test_pg_session_jwt));
     tests.push(test_fn("test_bgworker", None, test_bgworker));
+    tests.push(test_fn("valid_string_jti", None, valid_string_jti));
+    tests.push(test_fn("mixed_jti_types", None, mixed_jti_types));
     tests.push(test_fn(
         "test_jwt_claim_sub_with_jwk",
         None,
@@ -86,17 +85,6 @@ where
     Trial::test(name, move || {
         pgrx_tests::run_test(None, None, vec![], f).map_err(libtest_mimic::Failed::from)
     })
-}
-
-fn wrong_txid(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postgres::Error> {
-    let jwt1 = sign_jwt(sk, r#"{"kid":1}"#, r#"{"jti":1}"#);
-    let jwt2 = sign_jwt(sk, r#"{"kid":1}"#, r#"{"jti":2}"#);
-
-    tx.execute("select auth.init()", &[])?;
-    tx.execute("select auth.jwt_session_init($1)", &[&jwt2])?;
-    tx.execute("select auth.jwt_session_init($1)", &[&jwt1])?;
-
-    Ok(())
 }
 
 fn invalid_nbf(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postgres::Error> {
@@ -171,6 +159,46 @@ fn valid_time_leeway(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), p
     tx.execute("select auth.init()", &[])?;
     tx.execute("select auth.jwt_session_init($1)", &[&jwt1])?;
     tx.execute("select auth.jwt_session_init($1)", &[&jwt2])?;
+
+    Ok(())
+}
+
+fn valid_string_jti(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postgres::Error> {
+    let header = r#"{"kid":1}"#;
+    let jwt1 = sign_jwt(
+        sk,
+        header,
+        json!({"jti": "550e8400-e29b-41d4-a716-446655440000", "sub": "first"}),
+    );
+    let jwt2 = sign_jwt(
+        sk,
+        header,
+        json!({"jti": "123e4567-e89b-12d3-a456-426614174000", "sub": "second"}),
+    );
+
+    tx.execute("select auth.init()", &[])?;
+    tx.execute("select auth.jwt_session_init($1)", &[&jwt1])?;
+    tx.execute("select auth.jwt_session_init($1)", &[&jwt2])?;
+
+    let user_id = tx.query_one("select auth.user_id()", &[])?;
+    let user_id = user_id.get::<_, String>("user_id");
+    assert_eq!(user_id, "second");
+
+    Ok(())
+}
+
+fn mixed_jti_types(sk: &SigningKey, tx: &mut postgres::Client) -> Result<(), postgres::Error> {
+    let header = r#"{"kid":1}"#;
+    let jwt_numeric = sign_jwt(sk, header, json!({"jti": 42, "sub": "numeric"}));
+    let jwt_string = sign_jwt(sk, header, json!({"jti": "token-43", "sub": "string"}));
+
+    tx.execute("select auth.init()", &[])?;
+    tx.execute("select auth.jwt_session_init($1)", &[&jwt_string])?;
+    tx.execute("select auth.jwt_session_init($1)", &[&jwt_numeric])?;
+
+    let user_id = tx.query_one("select auth.user_id()", &[])?;
+    let user_id = user_id.get::<_, String>("user_id");
+    assert_eq!(user_id, "numeric");
 
     Ok(())
 }
