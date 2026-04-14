@@ -37,7 +37,7 @@ eyre = "0.6.12"
 libtest-mimic = "0.8.1"
 pgrx-tests = { path = "./pgrx-tests" }
 postgres = "0.19.9"
-rand = "0.8"
+rand = "0.9"
 ed25519-dalek = { version = "2", default-features = false, features = ["rand_core"] }
 
 [profile.dev]
