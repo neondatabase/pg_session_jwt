@@ -21,7 +21,28 @@ Features
 
 * **Retrieve the user ID** or other session-related information directly from the database.
 
+* **Organization helpers for Neon Auth** (`auth.organization()`, `auth.organization_id()`) when using the Neon Auth organization plugin.
+
 * Simple JSONB-based storage and retrieval of session information.
+
+Auth provider compatibility
+---------------------------
+
+The `auth` schema mixes **portable** helpers (work with most JWT issuers) and **Neon Auth–specific** helpers.
+
+| Function | Portable? | Notes |
+|----------|-----------|-------|
+| `auth.user_id()`, `auth.uid()` | Yes | Reads standard `sub` claim |
+| `auth.session()`, `auth.jwt()` | Yes | Returns the full JWT payload / claims JSON |
+| `auth.organization()`, `auth.organization_id()` | **Neon Auth only** | Reads the `"o"` claim from the [Neon Auth organization plugin](https://neon.tech/docs/neon-auth/overview) |
+
+**Other auth providers** (Auth0, Clerk, Supabase, Firebase, Cognito, etc.) do not share a standard organization claim name or shape in access tokens. Many do not include an active organization in the JWT at all. For those providers:
+
+- Use `auth.jwt()` and extract whatever claim your issuer documents (for example a custom namespaced claim).
+- Do **not** rely on `auth.organization()` unless your tokens intentionally include Neon Auth’s `"o"` object: `{"id": "<uuid>", "slug": "<string>", "role": "<member-role>"}`.
+- When `"o"` is absent or not a JSON object, `auth.organization()` and `auth.organization_id()` return SQL `NULL`. RLS policies that compare against them therefore fail closed (no rows match), which is usually desirable.
+
+There is no plan to normalize organization data across providers inside this extension; `auth.jwt()` remains the generic escape hatch.
 
 Usage
 -----
@@ -102,6 +123,46 @@ This dual behavior allows for flexible authentication scenarios while maintainin
 ### 6\. auth.uid() → uuid
 Similar to `auth.user_id()` but returns UUID. Expects `"sub"` to be UUID,
 otherwise returns NULL.
+
+### 7\. auth.organization() → jsonb
+
+> **Neon Auth only.** See [Auth provider compatibility](#auth-provider-compatibility) for portable vs Neon-specific functions.
+
+Returns the active organization from the JWT `"o"` claim (Neon Auth organization plugin). The claim shape is:
+
+```json
+{"id": "<uuid>", "slug": "<string>", "role": "<member-role>"}
+```
+
+Behavior matches `auth.jwt()` / `auth.session()` for JWK-validated JWTs vs PostgREST `request.jwt.claims`:
+
+- Returns the full `"o"` object as JSONB when present and is a JSON object.
+- Returns SQL `NULL` when the JWT is missing, invalid, has no `"o"` claim, or `"o"` is not a JSON object.
+
+### 8\. auth.organization\_id() → text
+
+> **Neon Auth only.**
+
+Returns `auth.organization() ->> 'id'`. Returns SQL `NULL` when there is no active organization or when `"id"` is missing or not a string.
+
+#### Organization-scoped RLS example
+
+```sql
+-- Team rows
+CREATE POLICY team_select ON team
+  FOR SELECT
+  USING (organization_id = auth.organization_id());
+
+-- Role-gated (optional)
+CREATE POLICY team_admin_update ON team
+  FOR UPDATE
+  USING (
+    organization_id = auth.organization_id()
+    AND (auth.organization() ->> 'role') IN ('admin', 'owner')
+  );
+```
+
+A copy-paste snippet for Neon docs lives in [`docs/organization-rls-snippet.md`](docs/organization-rls-snippet.md).
 
 Audit logs
 ----------
