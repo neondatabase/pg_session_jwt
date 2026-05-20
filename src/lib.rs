@@ -372,6 +372,50 @@ pub mod auth {
             .map(|uuid| PgUuid::from_bytes(*uuid.as_bytes()))
     }
 
+    fn jwt_claims() -> Option<serde_json::Value> {
+        if NEON_AUTH_JWK.get().is_none() {
+            return get_claims_from_guc();
+        }
+        validate_jwt().map(serde_json::Value::Object)
+    }
+
+    fn organization_claim() -> Option<serde_json::Value> {
+        let claims = jwt_claims()?;
+        if claims.is_null() {
+            return None;
+        }
+        let o = claims.get("o")?;
+        if o.is_null() {
+            return None;
+        }
+        Some(o.clone())
+    }
+
+    /// Active organization from the JWT `"o"` claim (Neon Auth organization plugin).
+    #[pg_extern(parallel_safe, stable)]
+    pub fn organization() -> Option<JsonB> {
+        let o = organization_claim()?;
+        if !o.is_object() {
+            return None;
+        }
+        Some(JsonB(o))
+    }
+
+    /// Organization id from the active organization claim (`"o"."id"`).
+    ///
+    /// Returns `uuid` for comparison with Neon Auth `organization_id` columns.
+    /// Returns SQL `NULL` when missing or not a valid UUID string (same as `auth.uid()`).
+    #[pg_extern(parallel_safe, stable)]
+    pub fn organization_id() -> Option<PgUuid> {
+        organization().and_then(|org| {
+            org.0
+                .get("id")
+                .and_then(|id| id.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok())
+                .map(|uuid| PgUuid::from_bytes(*uuid.as_bytes()))
+        })
+    }
+
     fn json_base64_decode<D: DeserializeOwned>(s: &str) -> D {
         let r = Decoder::<Base64UrlUnpadded>::new(s.as_bytes()).unwrap_or_else(|e| {
             error_code!(

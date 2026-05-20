@@ -56,6 +56,19 @@ fn main() -> ExitCode {
         "test_session_fallback_when_not_set",
         test_session_fallback_when_not_set,
     ));
+    tests.push(test_fn(
+        "test_organization_with_jwk",
+        None,
+        test_organization_with_jwk,
+    ));
+    tests.push(test_without_jwk(
+        "test_organization_from_claims",
+        test_organization_from_claims,
+    ));
+    tests.push(test_without_jwk(
+        "test_organization_when_claims_not_set",
+        test_organization_when_claims_not_set,
+    ));
 
     run(&args, tests).exit_code()
 }
@@ -327,6 +340,156 @@ fn test_session_fallback_when_set(tx: &mut postgres::Client) -> Result<(), postg
     );
     let role_alias: Option<String> = tx.query_one("SELECT (auth.jwt()->>'role')", &[])?.get(0);
     assert_eq!(role_alias, role);
+
+    Ok(())
+}
+
+const ORG_ID: &str = "11111111-1111-1111-1111-111111111111";
+
+fn test_organization_with_jwk(
+    sk: &SigningKey,
+    tx: &mut postgres::Client,
+) -> Result<(), postgres::Error> {
+    let header = r#"{"kid":1}"#;
+
+    tx.execute("select auth.init()", &[])?;
+
+    // No JWT set
+    assert_organization_null(tx)?;
+
+    // Valid JWT without "o"
+    let jwt_no_org = sign_jwt(sk, header, r#"{"sub":"user","jti":1}"#);
+    tx.execute("select auth.jwt_session_init($1)", &[&jwt_no_org])?;
+    assert_organization_null(tx)?;
+
+    // Valid "o" claim
+    let jwt_with_org = sign_jwt(
+        sk,
+        header,
+        json!({
+            "sub": "user",
+            "jti": 2,
+            "o": {
+                "id": ORG_ID,
+                "slug": "acme",
+                "role": "admin"
+            }
+        }),
+    );
+    tx.execute("select auth.jwt_session_init($1)", &[&jwt_with_org])?;
+    let org_matches: bool = tx
+        .query_one(
+            format!(
+                "SELECT auth.organization() = '{{\"id\":\"{ORG_ID}\",\"slug\":\"acme\",\"role\":\"admin\"}}'::jsonb"
+            )
+            .as_str(),
+            &[],
+        )?
+        .get(0);
+    assert!(
+        org_matches,
+        "auth.organization() should return the full o claim"
+    );
+    let org_id: Option<String> = tx.query_one("SELECT auth.organization_id()::text", &[])?.get(0);
+    assert_eq!(org_id, Some(ORG_ID.to_string()));
+    let org_id_is_uuid: Option<bool> = tx
+        .query_one(
+            format!("SELECT auth.organization_id() = '{ORG_ID}'::uuid").as_str(),
+            &[],
+        )?
+        .get(0);
+    assert_eq!(org_id_is_uuid, Some(true));
+
+    // Malformed "o" (string)
+    let jwt_bad_org = sign_jwt(sk, header, json!({"sub": "user", "jti": 3, "o": "not-an-object"}));
+    tx.execute("select auth.jwt_session_init($1)", &[&jwt_bad_org])?;
+    assert_organization_null(tx)?;
+
+    // Malformed "o" (object missing id)
+    let jwt_missing_id = sign_jwt(
+        sk,
+        header,
+        json!({"sub": "user", "jti": 4, "o": {"slug": "acme", "role": "member"}}),
+    );
+    tx.execute("select auth.jwt_session_init($1)", &[&jwt_missing_id])?;
+    let org: Option<String> = tx
+        .query_one("SELECT auth.organization() IS NOT NULL", &[])?
+        .get(0);
+    assert_eq!(
+        org,
+        Some(true),
+        "organization() should return object even without id"
+    );
+    let org_id: Option<String> = tx.query_one("SELECT auth.organization_id()::text", &[])?.get(0);
+    assert_eq!(org_id, None);
+
+    // Invalid UUID in "id"
+    let jwt_bad_id = sign_jwt(
+        sk,
+        header,
+        json!({"sub": "user", "jti": 5, "o": {"id": "not-a-uuid", "slug": "acme", "role": "member"}}),
+    );
+    tx.execute("select auth.jwt_session_init($1)", &[&jwt_bad_id])?;
+    let org_id: Option<String> = tx.query_one("SELECT auth.organization_id()::text", &[])?.get(0);
+    assert_eq!(org_id, None, "invalid organization id should return NULL");
+
+    Ok(())
+}
+
+fn test_organization_from_claims(tx: &mut postgres::Client) -> Result<(), postgres::Error> {
+    tx.execute("RESET request.jwt.claims", &[])?;
+    assert_organization_null(tx)?;
+
+    tx.execute(
+        r#"SET request.jwt.claims = '{"sub":"user"}'"#,
+        &[],
+    )?;
+    assert_organization_null(tx)?;
+
+    tx.execute(
+        format!(
+            r#"SET request.jwt.claims = '{{"sub":"user","o":{{"id":"{ORG_ID}","slug":"acme","role":"owner"}}}}'"#
+        )
+        .as_str(),
+        &[],
+    )?;
+    let org_id: Option<String> = tx.query_one("SELECT auth.organization_id()::text", &[])?.get(0);
+    assert_eq!(org_id, Some(ORG_ID.to_string()));
+
+    tx.execute(
+        r#"SET request.jwt.claims = '{"sub":"user","o":"bad"}'"#,
+        &[],
+    )?;
+    assert_organization_null(tx)?;
+
+    Ok(())
+}
+
+fn test_organization_when_claims_not_set(
+    tx: &mut postgres::Client,
+) -> Result<(), postgres::Error> {
+    tx.execute("RESET request.jwt.claims", &[])?;
+    assert_organization_null(tx)?;
+    Ok(())
+}
+
+fn assert_organization_null(tx: &mut postgres::Client) -> Result<(), postgres::Error> {
+    let org: Option<String> = tx
+        .query_one("SELECT auth.organization()::text", &[])?
+        .get(0);
+    assert_eq!(org, None, "auth.organization() should be SQL NULL");
+
+    let org_id: Option<String> = tx.query_one("SELECT auth.organization_id()::text", &[])?.get(0);
+    assert_eq!(org_id, None, "auth.organization_id() should be SQL NULL");
+
+    let org_is_null: bool = tx
+        .query_one("SELECT auth.organization() IS NULL", &[])?
+        .get(0);
+    assert!(org_is_null);
+    let org_id_is_null: bool = tx
+        .query_one("SELECT auth.organization_id() IS NULL", &[])?
+        .get(0);
+    assert!(org_id_is_null);
 
     Ok(())
 }
