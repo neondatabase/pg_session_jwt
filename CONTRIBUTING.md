@@ -7,7 +7,7 @@ pgrx](https://github.com/pgcentralfoundation/pgrx#system-requirements).
 Now you can install `cargo-pgrx` but make sure to install the same version
 that's used by this extension:
 ```console
-cargo install --locked --version 0.16.1 cargo-pgrx
+cargo install --locked --version 0.18.0 cargo-pgrx
 ```
 
 Let's initialize pgrx.

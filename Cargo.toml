@@ -9,10 +9,6 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib", "lib"]
 
-[[bin]]
-name = "pgrx_embed_pg_session_jwt"
-path = "./src/bin/pgrx_embed.rs"
-
 [features]
 default = ["pg17"]
 pg14 = ["pgrx/pg14", "pgrx-tests/pg14" ]
@@ -27,7 +23,7 @@ base64ct = { version = "1.6.0", features = ["std"] }
 heapless = { version = "0.8.0", features = ["serde"] }
 jose-jwk = { version = "0.1.2", default-features = false }
 ed25519-dalek = { version = "2", default-features = false }
-pgrx = "0.16.1"
+pgrx = "0.18.0"
 serde = { version = "1.0.203", features = ["derive"], default-features = false }
 serde_json = { version = "1.0.117", default-features = false }
 uuid = "1.18.1"
