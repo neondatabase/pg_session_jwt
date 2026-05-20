@@ -402,12 +402,17 @@ pub mod auth {
     }
 
     /// Organization id from the active organization claim (`"o"."id"`).
+    ///
+    /// Returns `uuid` for comparison with Neon Auth `organization_id` columns.
+    /// Returns SQL `NULL` when missing or not a valid UUID string (same as `auth.uid()`).
     #[pg_extern(parallel_safe, stable)]
-    pub fn organization_id() -> Option<String> {
+    pub fn organization_id() -> Option<PgUuid> {
         organization().and_then(|org| {
             org.0
                 .get("id")
-                .and_then(|id| id.as_str().map(|s| s.to_owned()))
+                .and_then(|id| id.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok())
+                .map(|uuid| PgUuid::from_bytes(*uuid.as_bytes()))
         })
     }
 

@@ -390,8 +390,15 @@ fn test_organization_with_jwk(
         org_matches,
         "auth.organization() should return the full o claim"
     );
-    let org_id: Option<String> = tx.query_one("SELECT auth.organization_id()", &[])?.get(0);
+    let org_id: Option<String> = tx.query_one("SELECT auth.organization_id()::text", &[])?.get(0);
     assert_eq!(org_id, Some(ORG_ID.to_string()));
+    let org_id_is_uuid: Option<bool> = tx
+        .query_one(
+            format!("SELECT auth.organization_id() = '{ORG_ID}'::uuid").as_str(),
+            &[],
+        )?
+        .get(0);
+    assert_eq!(org_id_is_uuid, Some(true));
 
     // Malformed "o" (string)
     let jwt_bad_org = sign_jwt(sk, header, json!({"sub": "user", "jti": 3, "o": "not-an-object"}));
@@ -413,8 +420,18 @@ fn test_organization_with_jwk(
         Some(true),
         "organization() should return object even without id"
     );
-    let org_id: Option<String> = tx.query_one("SELECT auth.organization_id()", &[])?.get(0);
+    let org_id: Option<String> = tx.query_one("SELECT auth.organization_id()::text", &[])?.get(0);
     assert_eq!(org_id, None);
+
+    // Invalid UUID in "id"
+    let jwt_bad_id = sign_jwt(
+        sk,
+        header,
+        json!({"sub": "user", "jti": 5, "o": {"id": "not-a-uuid", "slug": "acme", "role": "member"}}),
+    );
+    tx.execute("select auth.jwt_session_init($1)", &[&jwt_bad_id])?;
+    let org_id: Option<String> = tx.query_one("SELECT auth.organization_id()::text", &[])?.get(0);
+    assert_eq!(org_id, None, "invalid organization id should return NULL");
 
     Ok(())
 }
@@ -436,7 +453,7 @@ fn test_organization_from_claims(tx: &mut postgres::Client) -> Result<(), postgr
         .as_str(),
         &[],
     )?;
-    let org_id: Option<String> = tx.query_one("SELECT auth.organization_id()", &[])?.get(0);
+    let org_id: Option<String> = tx.query_one("SELECT auth.organization_id()::text", &[])?.get(0);
     assert_eq!(org_id, Some(ORG_ID.to_string()));
 
     tx.execute(
@@ -462,7 +479,7 @@ fn assert_organization_null(tx: &mut postgres::Client) -> Result<(), postgres::E
         .get(0);
     assert_eq!(org, None, "auth.organization() should be SQL NULL");
 
-    let org_id: Option<String> = tx.query_one("SELECT auth.organization_id()", &[])?.get(0);
+    let org_id: Option<String> = tx.query_one("SELECT auth.organization_id()::text", &[])?.get(0);
     assert_eq!(org_id, None, "auth.organization_id() should be SQL NULL");
 
     let org_is_null: bool = tx

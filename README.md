@@ -32,9 +32,9 @@ The `auth` schema mixes **portable** helpers (work with most JWT issuers) and **
 
 | Function | Portable? | Notes |
 |----------|-----------|-------|
-| `auth.user_id()`, `auth.uid()` | Yes | Reads standard `sub` claim |
+| `auth.user_id()`, `auth.uid()` | Yes | Reads standard `sub` claim (`user_id` as text, `uid` as uuid when `sub` parses) |
 | `auth.session()`, `auth.jwt()` | Yes | Returns the full JWT payload / claims JSON |
-| `auth.organization()`, `auth.organization_id()` | **Neon Auth only** | Reads the `"o"` claim from the [Neon Auth organization plugin](https://neon.tech/docs/neon-auth/overview) |
+| `auth.organization()`, `auth.organization_id()` | **Neon Auth only** | Reads the `"o"` claim (`organization_id` returns uuid for Neon Auth `organization_id` columns) |
 
 **Other auth providers** (Auth0, Clerk, Supabase, Firebase, Cognito, etc.) do not share a standard organization claim name or shape in access tokens. Many do not include an active organization in the JWT at all. For those providers:
 
@@ -139,11 +139,11 @@ Behavior matches `auth.jwt()` / `auth.session()` for JWK-validated JWTs vs Postg
 - Returns the full `"o"` object as JSONB when present and is a JSON object.
 - Returns SQL `NULL` when the JWT is missing, invalid, has no `"o"` claim, or `"o"` is not a JSON object.
 
-### 8\. auth.organization\_id() → text
+### 8\. auth.organization\_id() → uuid
 
 > **Neon Auth only.**
 
-Returns `auth.organization() ->> 'id'`. Returns SQL `NULL` when there is no active organization or when `"id"` is missing or not a string.
+Returns `auth.organization() ->> 'id'` parsed as `uuid`, for direct comparison with Neon Auth `organization_id` columns (same invalid-UUID → `NULL` behavior as `auth.uid()`). Returns SQL `NULL` when there is no active organization, when `"id"` is missing, or when `"id"` is not a valid UUID string.
 
 #### Organization-scoped RLS example
 

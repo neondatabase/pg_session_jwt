@@ -15,7 +15,7 @@ When `"o"` is missing or malformed, both functions return SQL `NULL` (RLS polici
 ## Functions
 
 - `auth.organization()` — full `"o"` object as `jsonb`, or SQL `NULL` if there is no active organization
-- `auth.organization_id()` — `"o"."id"` as `text`, or SQL `NULL` if there is no active organization
+- `auth.organization_id()` — `"o"."id"` as `uuid`, or SQL `NULL` if there is no active organization or id is not a valid UUID
 
 ## Row Level Security example
 
