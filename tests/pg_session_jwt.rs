@@ -412,7 +412,7 @@ fn test_organization_with_jwk(
         json!({"sub": "user", "jti": 4, "o": {"slug": "acme", "role": "member"}}),
     );
     tx.execute("select auth.jwt_session_init($1)", &[&jwt_missing_id])?;
-    let org: Option<String> = tx
+    let org: Option<bool> = tx
         .query_one("SELECT auth.organization() IS NOT NULL", &[])?
         .get(0);
     assert_eq!(
